@@ -1,3 +1,4 @@
+use crate::dotnet::{self, RuntimeRequirement};
 use crate::platform;
 use crate::updates;
 use anyhow::{Context as _, Result};
@@ -17,6 +18,7 @@ const DEFAULT_SDK_COMPONENT: &str = "Microsoft.VisualStudio.Component.Windows11S
 const FIRST_WINDOWS_11_SDK_BUILD: u32 = 22000;
 const VISUAL_STUDIO_2022_MAJOR: u32 = 17;
 const VISUAL_STUDIO_2026_MAJOR: u32 = 18;
+const DOTNET_INSTALL_LOG: &str = "dotnet-runtime-install.log";
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ToolVersion {
@@ -46,6 +48,11 @@ impl ToolVersion {
     pub fn major(&self) -> u32 {
         let [major, ..] = self.parts;
         major
+    }
+
+    pub fn minor(&self) -> u32 {
+        let [_, minor, ..] = self.parts;
+        minor
     }
 
     fn build(&self) -> u32 {
@@ -116,6 +123,7 @@ pub struct ToolchainRequirements {
     pub sdk_component: String,
     pub minimum_visual_studio_2022: Option<ToolVersion>,
     pub minimum_visual_studio_2026: Option<ToolVersion>,
+    pub dotnet: Option<RuntimeRequirement>,
 }
 
 impl Default for ToolchainRequirements {
@@ -128,6 +136,7 @@ impl Default for ToolchainRequirements {
             sdk_component: DEFAULT_SDK_COMPONENT.to_string(),
             minimum_visual_studio_2022: None,
             minimum_visual_studio_2026: None,
+            dotnet: None,
         }
     }
 }
@@ -200,6 +209,7 @@ pub fn parse_requirements(text: &str) -> Result<ToolchainRequirements> {
         sdk_component,
         minimum_visual_studio_2022: parse(&file.minimum_visual_studio2022_version),
         minimum_visual_studio_2026: parse(&file.minimum_visual_studio2026_version),
+        dotnet: None,
     })
 }
 
@@ -280,20 +290,27 @@ impl ComponentState {
 pub struct ToolchainStatus {
     pub compiler: ComponentState,
     pub windows_sdk: ComponentState,
+    pub dotnet: ComponentState,
     pub instances: Vec<VisualStudioInstance>,
 }
 
 impl ToolchainStatus {
+    #[cfg(not(target_os = "windows"))]
     pub fn not_required() -> Self {
         Self {
             compiler: ComponentState::NotRequired,
             windows_sdk: ComponentState::NotRequired,
+            dotnet: ComponentState::NotRequired,
             instances: Vec::new(),
         }
     }
 
-    pub fn is_ready(&self) -> bool {
+    pub fn has_cpp_tools(&self) -> bool {
         self.compiler.is_satisfied() && self.windows_sdk.is_satisfied()
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.has_cpp_tools() && self.dotnet.is_satisfied()
     }
 }
 
@@ -316,12 +333,55 @@ pub fn evaluate(
     ToolchainStatus {
         compiler: compiler.map_or(ComponentState::Missing, ComponentState::Found),
         windows_sdk: windows_sdk.map_or(ComponentState::Missing, ComponentState::Found),
+        dotnet: ComponentState::NotRequired,
         instances,
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InstallPlan {
+pub struct DotnetInstall {
+    pub channel: String,
+    pub download_page: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallPlan {
+    pub dotnet: Option<DotnetInstall>,
+    pub visual_studio: Option<VisualStudioPlan>,
+}
+
+impl InstallPlan {
+    pub fn first_progress(&self) -> InstallProgress {
+        let downloads_first = self.dotnet.is_some()
+            || matches!(self.visual_studio, Some(VisualStudioPlan::Fresh { .. }));
+        if downloads_first {
+            InstallProgress::Downloading {
+                received: 0,
+                total: None,
+            }
+        } else {
+            InstallProgress::Verifying
+        }
+    }
+}
+
+pub fn plan_install(requirements: &ToolchainRequirements, status: &ToolchainStatus) -> InstallPlan {
+    let dotnet = match (status.dotnet, requirements.dotnet) {
+        (ComponentState::Missing, Some(requirement)) => Some(DotnetInstall {
+            channel: requirement.channel(),
+            download_page: requirement.download_page(),
+        }),
+        _ => None,
+    };
+    let only_dotnet_missing = dotnet.is_some() && status.has_cpp_tools();
+    InstallPlan {
+        visual_studio: (!only_dotnet_missing).then(|| plan_visual_studio(requirements, status)),
+        dotnet,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VisualStudioPlan {
     Fresh {
         components: Vec<String>,
     },
@@ -333,14 +393,17 @@ pub enum InstallPlan {
     },
 }
 
-pub fn plan_install(requirements: &ToolchainRequirements, status: &ToolchainStatus) -> InstallPlan {
+pub fn plan_visual_studio(
+    requirements: &ToolchainRequirements,
+    status: &ToolchainStatus,
+) -> VisualStudioPlan {
     let existing = status
         .instances
         .iter()
         .filter(|instance| instance.version.major() == VISUAL_STUDIO_2022_MAJOR)
         .max_by_key(|instance| instance.version);
     let Some(instance) = existing else {
-        return InstallPlan::Fresh {
+        return VisualStudioPlan::Fresh {
             components: vec![
                 BUILD_TOOLS_WORKLOAD.to_string(),
                 MSVC_COMPONENT.to_string(),
@@ -354,7 +417,7 @@ pub fn plan_install(requirements: &ToolchainRequirements, status: &ToolchainStat
             .msvc_versions
             .iter()
             .any(|version| requirements.allows_msvc(*version));
-    InstallPlan::Modify {
+    VisualStudioPlan::Modify {
         install_path: instance.install_path.clone(),
         display_name: instance.display_name.clone(),
         components: vec![
@@ -496,6 +559,7 @@ pub enum InstallProgress {
     Verifying,
     Updating,
     Installing,
+    InstallingDotnet,
 }
 
 pub fn installer_directory() -> PathBuf {
@@ -515,8 +579,75 @@ pub fn install(
             working_directory.display()
         )
     })?;
+    let mut reboot_required = false;
+    if let Some(dotnet) = &plan.dotnet {
+        match install_dotnet(dotnet, &working_directory, cancel, progress)? {
+            InstallOutcome::Completed => {}
+            InstallOutcome::RebootRequired => reboot_required = true,
+            other => return Ok(other),
+        }
+    }
+    let outcome = match &plan.visual_studio {
+        Some(visual_studio) => {
+            install_visual_studio(visual_studio, &working_directory, cancel, progress)?
+        }
+        None => InstallOutcome::Completed,
+    };
+    Ok(match outcome {
+        InstallOutcome::Completed if reboot_required => InstallOutcome::RebootRequired,
+        other => other,
+    })
+}
+
+fn install_dotnet(
+    dotnet: &DotnetInstall,
+    working_directory: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(InstallProgress),
+) -> Result<InstallOutcome> {
+    let (url, file_name) = dotnet::runtime_installer(&dotnet.channel).ok_or_else(|| {
+        tr_anyhow!(
+            "이 플랫폼에서는 .NET 런타임 설치를 지원하지 않습니다",
+            "Installing the .NET runtime is not supported on this platform"
+        )
+    })?;
+    let installer = working_directory.join(file_name);
+    progress(InstallProgress::Downloading {
+        received: 0,
+        total: None,
+    });
+    updates::download_file(&url, &installer, cancel, &mut |received, total| {
+        progress(InstallProgress::Downloading { received, total })
+    })?;
+    progress(InstallProgress::Verifying);
+    platform::verify_microsoft_signature(&installer)?;
+    progress(InstallProgress::InstallingDotnet);
+    let log_path = working_directory.join(DOTNET_INSTALL_LOG);
+    let outcome = run_installer(
+        &installer,
+        &dotnet::runtime_installer_arguments(&log_path),
+        working_directory,
+    )?;
+    if let InstallOutcome::Failed(code) = outcome {
+        tr_bail!(
+            ".NET {} 런타임 설치에 실패했습니다 (코드 {}). {}에서 로그를 확인하세요.",
+            ".NET {} runtime installation failed (code {}). Check the log at {}.",
+            dotnet.channel,
+            code,
+            log_path.display()
+        );
+    }
+    Ok(outcome)
+}
+
+fn install_visual_studio(
+    plan: &VisualStudioPlan,
+    working_directory: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(InstallProgress),
+) -> Result<InstallOutcome> {
     match plan {
-        InstallPlan::Fresh { components } => {
+        VisualStudioPlan::Fresh { components } => {
             let bootstrapper = working_directory.join(BUILD_TOOLS_BOOTSTRAPPER_NAME);
             progress(InstallProgress::Downloading {
                 received: 0,
@@ -534,10 +665,10 @@ pub fn install(
             run_installer(
                 &bootstrapper,
                 &bootstrapper_arguments(components),
-                &working_directory,
+                working_directory,
             )
         }
-        InstallPlan::Modify {
+        VisualStudioPlan::Modify {
             install_path,
             components,
             update_first,
@@ -554,7 +685,7 @@ pub fn install(
             if *update_first {
                 progress(InstallProgress::Updating);
                 let outcome =
-                    run_installer(&setup, &update_arguments(install_path), &working_directory)?;
+                    run_installer(&setup, &update_arguments(install_path), working_directory)?;
                 if !matches!(
                     outcome,
                     InstallOutcome::Completed | InstallOutcome::RebootRequired
@@ -566,7 +697,7 @@ pub fn install(
             run_installer(
                 &setup,
                 &modify_arguments(install_path, components),
-                &working_directory,
+                working_directory,
             )
         }
     }
@@ -589,14 +720,17 @@ fn run_installer(
 }
 
 pub fn inspect(engine_root: &Path) -> (ToolchainRequirements, ToolchainStatus) {
-    let requirements = match read_requirements(engine_root) {
+    let mut requirements = match read_requirements(engine_root) {
         Ok(requirements) => requirements,
         Err(error) => {
             log::warn!("Using default toolchain requirements: {error:#}");
             ToolchainRequirements::default()
         }
     };
-    let status = platform::inspect_toolchain(&requirements);
+    let (dotnet_requirement, dotnet_state) = dotnet::inspect(engine_root);
+    requirements.dotnet = dotnet_requirement;
+    let mut status = platform::inspect_toolchain(&requirements);
+    status.dotnet = dotnet_state;
     (requirements, status)
 }
 
@@ -699,8 +833,8 @@ mod tests {
         assert_eq!(status.windows_sdk, ComponentState::Missing);
         assert!(!status.is_ready());
         assert_eq!(
-            plan_install(&requirements, &status),
-            InstallPlan::Fresh {
+            plan_visual_studio(&requirements, &status),
+            VisualStudioPlan::Fresh {
                 components: vec![
                     "Microsoft.VisualStudio.Workload.VCTools".into(),
                     "Microsoft.VisualStudio.Component.VC.Tools.x86.x64".into(),
@@ -739,8 +873,8 @@ mod tests {
         );
         assert_eq!(status.compiler, ComponentState::Missing);
         assert!(matches!(
-            plan_install(&requirements, &status),
-            InstallPlan::Fresh { .. }
+            plan_visual_studio(&requirements, &status),
+            VisualStudioPlan::Fresh { .. }
         ));
     }
 
@@ -748,8 +882,8 @@ mod tests {
     fn plans_modify_for_existing_visual_studio_2022() {
         let requirements = parse_requirements(UE_5_8_SDK).unwrap();
         let without_cpp = evaluate(&requirements, vec![instance("17.14.36015.10", &[])], &[]);
-        match plan_install(&requirements, &without_cpp) {
-            InstallPlan::Modify {
+        match plan_visual_studio(&requirements, &without_cpp) {
+            VisualStudioPlan::Modify {
                 components,
                 update_first,
                 ..
@@ -765,12 +899,57 @@ mod tests {
             &[],
         );
         assert!(matches!(
-            plan_install(&requirements, &banned_only),
-            InstallPlan::Modify {
+            plan_visual_studio(&requirements, &banned_only),
+            VisualStudioPlan::Modify {
                 update_first: true,
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn plans_dotnet_runtime_install() {
+        let mut requirements = parse_requirements(UE_5_8_SDK).unwrap();
+        requirements.dotnet = Some(RuntimeRequirement {
+            version: version("10.0.0"),
+            roll_forward: dotnet::RollForward::LatestMajor,
+        });
+        let mut status = evaluate(
+            &requirements,
+            vec![instance("17.14.36015.10", &["14.44.35211"])],
+            &[version("10.0.22621.0")],
+        );
+        assert!(status.is_ready());
+        status.dotnet = ComponentState::Missing;
+        assert!(!status.is_ready());
+        let plan = plan_install(&requirements, &status);
+        assert_eq!(
+            plan.dotnet,
+            Some(DotnetInstall {
+                channel: "10.0".into(),
+                download_page: "https://dotnet.microsoft.com/download/dotnet/10.0".into(),
+            })
+        );
+        assert_eq!(plan.visual_studio, None);
+        assert!(matches!(
+            plan.first_progress(),
+            InstallProgress::Downloading { .. }
+        ));
+
+        let mut missing_everything = evaluate(&requirements, Vec::new(), &[]);
+        missing_everything.dotnet = ComponentState::Missing;
+        let plan = plan_install(&requirements, &missing_everything);
+        assert!(plan.dotnet.is_some());
+        assert!(matches!(
+            plan.visual_studio,
+            Some(VisualStudioPlan::Fresh { .. })
+        ));
+
+        status.dotnet = ComponentState::Found(version("10.0.7"));
+        let forced = plan_install(&requirements, &status);
+        assert_eq!(forced.dotnet, None);
+        assert!(forced.visual_studio.is_some());
+        assert_eq!(forced.first_progress(), InstallProgress::Verifying);
     }
 
     #[test]

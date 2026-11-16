@@ -34,6 +34,17 @@ use winreg::enums::{
 };
 
 pub const BUILD_PLATFORM: &str = "Win64";
+pub const DOTNET_EXECUTABLE: &str = "dotnet.exe";
+#[cfg(target_arch = "aarch64")]
+pub const DOTNET_BUNDLE_ARCHITECTURES: &[&str] = &["win-arm64", "windows"];
+#[cfg(not(target_arch = "aarch64"))]
+pub const DOTNET_BUNDLE_ARCHITECTURES: &[&str] = &["win-x64", "windows"];
+#[cfg(target_arch = "aarch64")]
+pub const DOTNET_RUNTIME_INSTALLER: Option<&str> = Some("dotnet-runtime-win-arm64.exe");
+#[cfg(not(target_arch = "aarch64"))]
+pub const DOTNET_RUNTIME_INSTALLER: Option<&str> = Some("dotnet-runtime-win-x64.exe");
+pub const DOTNET_ARCHITECTURE_ROOT_VARIABLES: &[&str] =
+    &["DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_ROOT(x86)"];
 
 const WINDOWS_KITS_KEY: &str = r"SOFTWARE\Microsoft\Windows Kits\Installed Roots";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -178,6 +189,19 @@ pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
         .join("UnrealBuildTool")
         .join("UnrealBuildTool.exe");
     path.is_file().then_some(path)
+}
+
+pub fn system_dotnet_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = ["DOTNET_ROOT_X64", "DOTNET_ROOT"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    if let Some(program_files) = std::env::var_os("ProgramFiles") {
+        roots.push(PathBuf::from(program_files).join("dotnet"));
+    }
+    roots.dedup();
+    roots
 }
 
 fn visual_studio_installer_directory() -> Option<PathBuf> {

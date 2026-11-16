@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod i18n;
+mod dotnet;
 mod engines;
 mod paths;
 mod platform;

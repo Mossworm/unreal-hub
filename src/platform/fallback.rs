@@ -5,6 +5,10 @@ use std::process::Command;
 
 pub const EDITOR_CONFIG_PLATFORM: &str = "LinuxEditor";
 pub const BUILD_PLATFORM: &str = "Linux";
+pub const DOTNET_EXECUTABLE: &str = "dotnet";
+pub const DOTNET_BUNDLE_ARCHITECTURES: &[&str] = &["linux-x64", "linux"];
+pub const DOTNET_RUNTIME_INSTALLER: Option<&str> = None;
+pub const DOTNET_ARCHITECTURE_ROOT_VARIABLES: &[&str] = &["DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64"];
 
 pub fn launcher_installed_dat_path() -> Option<PathBuf> {
     None
@@ -95,6 +99,23 @@ pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
         .join("UnrealBuildTool")
         .join("UnrealBuildTool");
     path.is_file().then_some(path)
+}
+
+pub fn system_dotnet_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = std::env::var_os("DOTNET_ROOT")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
+    roots.extend(
+        [
+            "/usr/share/dotnet",
+            "/usr/lib/dotnet",
+            "/usr/local/share/dotnet",
+        ]
+        .into_iter()
+        .map(PathBuf::from),
+    );
+    roots
 }
 
 pub fn has_cpp_toolchain() -> bool {

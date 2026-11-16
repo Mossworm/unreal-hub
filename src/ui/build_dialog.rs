@@ -3,7 +3,7 @@ use crate::project_build::{self, BuildOutcome};
 use crate::state::{HubState, ToastKind};
 use crate::toolchain::{
     self, ComponentState, InstallOutcome, InstallPlan, InstallProgress, ToolchainRequirements,
-    ToolchainStatus,
+    ToolchainStatus, VisualStudioPlan,
 };
 use crate::ui::components::{
     Button, Icon, dialog_body, dialog_footer, dialog_frame, error_note, icon, section_label,
@@ -333,13 +333,7 @@ impl BuildDialog {
         self.install_cancelled = false;
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
-        self.phase = Phase::Installing(match plan {
-            InstallPlan::Fresh { .. } => InstallProgress::Downloading {
-                received: 0,
-                total: None,
-            },
-            InstallPlan::Modify { .. } => InstallProgress::Verifying,
-        });
+        self.phase = Phase::Installing(plan.first_progress());
         let worker = spawn_worker(
             "build-tools-install",
             move |report: &mut dyn FnMut(InstallProgress)| {
@@ -481,21 +475,49 @@ impl BuildDialog {
             .child(div().text_xs().text_color(theme.text_muted).child(detail))
     }
 
-    fn plan_description(&self) -> String {
+    fn plan_description(&self) -> Vec<String> {
+        let Some(plan) = &self.plan else {
+            return Vec::new();
+        };
+        let dotnet = plan.dotnet.as_ref().map(|dotnet| {
+            trf!(
+                "Microsoft .NET {} 런타임을 설치합니다. UnrealBuildTool 실행에 필요합니다.",
+                "Installs the Microsoft .NET {} runtime, which UnrealBuildTool needs to run.",
+                dotnet.channel
+            )
+        });
+        let visual_studio = plan
+            .visual_studio
+            .as_ref()
+            .map(Self::visual_studio_description);
+        dotnet.into_iter().chain(visual_studio).collect()
+    }
+
+    fn download_page(&self) -> String {
         match &self.plan {
-            Some(InstallPlan::Modify {
+            Some(InstallPlan {
+                dotnet: Some(dotnet),
+                visual_studio: None,
+            }) => dotnet.download_page.clone(),
+            _ => toolchain::BUILD_TOOLS_DOWNLOAD_PAGE.to_string(),
+        }
+    }
+
+    fn visual_studio_description(plan: &VisualStudioPlan) -> String {
+        match plan {
+            VisualStudioPlan::Modify {
                 display_name,
                 update_first: true,
                 ..
-            }) => trf!(
+            } => trf!(
                 "설치된 {display_name}을(를) 최신 버전으로 업데이트한 뒤 C++ 빌드 도구와 Windows SDK를 추가합니다.",
                 "Updates the installed {display_name}, then adds the C++ build tools and Windows SDK."
             ),
-            Some(InstallPlan::Modify { display_name, .. }) => trf!(
+            VisualStudioPlan::Modify { display_name, .. } => trf!(
                 "설치된 {display_name}에 C++ 빌드 도구와 Windows SDK를 추가합니다.",
                 "Adds the C++ build tools and Windows SDK to the installed {display_name}."
             ),
-            _ => tr!(
+            VisualStudioPlan::Fresh { .. } => tr!(
                 "Visual Studio 2022 Build Tools를 설치합니다. 편집기 없이 C++ 빌드에 필요한 도구만 설치하며, 수 GB를 내려받아 수십 분 정도 걸릴 수 있습니다.",
                 "Installs Visual Studio 2022 Build Tools: only the tools needed to build C++, without the IDE. It downloads several GB and can take tens of minutes."
             )
@@ -512,14 +534,28 @@ impl BuildDialog {
             .status
             .as_ref()
             .map_or(ComponentState::Missing, |status| status.windows_sdk);
-        let fresh = matches!(self.plan, Some(InstallPlan::Fresh { .. }));
+        let dotnet = self
+            .status
+            .as_ref()
+            .map_or(ComponentState::NotRequired, |status| status.dotnet);
+        let fresh = matches!(
+            self.plan,
+            Some(InstallPlan {
+                visual_studio: Some(VisualStudioPlan::Fresh { .. }),
+                ..
+            })
+        );
+        let uses_visual_studio_installer = self
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.visual_studio.is_some());
         div()
             .flex()
             .flex_col()
             .gap_3()
             .child(tr!(
-                "C++ 프로젝트를 빌드하려면 Microsoft C++ 빌드 도구가 필요합니다.",
-                "Building a C++ project requires the Microsoft C++ build tools."
+                "C++ 프로젝트를 빌드하려면 아래 도구가 필요합니다.",
+                "Building a C++ project requires the tools below."
             ))
             .child(
                 div()
@@ -541,16 +577,33 @@ impl BuildDialog {
                         "Windows SDK",
                         windows_sdk,
                         self.requirements.minimum_sdk.map(|version| version.to_string()),
-                    )),
+                    ))
+                    .when(dotnet != ComponentState::NotRequired, |this| {
+                        this.child(self.requirement_row(
+                            theme,
+                            tr!(".NET 런타임", ".NET runtime"),
+                            dotnet,
+                            self.requirements
+                                .dotnet
+                                .map(|requirement| requirement.version.to_string()),
+                        ))
+                    }),
             )
             .child(section_label(theme, tr!("설치 내용", "What will be installed")))
-            .child(self.plan_description())
+            .children(self.plan_description())
             .child(warning_note(
                 theme,
-                tr!(
-                    "설치를 시작하면 Windows 관리자 권한 확인 창이 뜹니다. 진행 상황은 Visual Studio Installer 창에 표시됩니다.",
-                    "Windows will ask for administrator permission. Progress is shown in the Visual Studio Installer window."
-                ),
+                if uses_visual_studio_installer {
+                    tr!(
+                        "설치를 시작하면 Windows 관리자 권한 확인 창이 뜹니다. 진행 상황은 Visual Studio Installer 창에 표시됩니다.",
+                        "Windows will ask for administrator permission. Progress is shown in the Visual Studio Installer window."
+                    )
+                } else {
+                    tr!(
+                        "설치를 시작하면 Windows 관리자 권한 확인 창이 뜹니다.",
+                        "Windows will ask for administrator permission."
+                    )
+                },
             ))
             .when(fresh, |this| {
                 this.child(div().text_xs().text_color(theme.text_muted).child(tr!(
@@ -591,6 +644,9 @@ impl BuildDialog {
             .to_string(),
             InstallProgress::Installing => {
                 tr!("빌드 도구를 설치하는 중…", "Installing the build tools…").to_string()
+            }
+            InstallProgress::InstallingDotnet => {
+                tr!(".NET 런타임을 설치하는 중…", "Installing the .NET runtime…").to_string()
             }
         };
         let external = matches!(
@@ -737,7 +793,10 @@ impl BuildDialog {
             tr!("다운로드 페이지 열기", "Open Download Page"),
         )
         .ghost()
-        .on_click(|_, _, cx| cx.open_url(toolchain::BUILD_TOOLS_DOWNLOAD_PAGE));
+        .on_click({
+            let page = self.download_page();
+            move |_, _, cx| cx.open_url(&page)
+        });
         let log_path = project_build::build_log_path(&self.project_file);
         match &self.phase {
             Phase::Checking => footer.child(close(tr!("닫기", "Close"))),

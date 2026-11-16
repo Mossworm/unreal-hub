@@ -1,3 +1,4 @@
+use crate::dotnet;
 use crate::platform;
 use anyhow::{Context as _, Result};
 use std::ffi::OsString;
@@ -10,12 +11,13 @@ use std::time::Duration;
 const BUILD_LOG: &str = "UnrealHub-Build.log";
 const TARGET_SUFFIX: &str = ".target.cs";
 const EDITOR_TARGET_TYPE: &str = "TargetType.Editor";
-const TOOLCHAIN_FAILURE_MARKERS: [&str; 5] = [
+const TOOLCHAIN_FAILURE_MARKERS: [&str; 6] = [
     "must be installed in order to build this target",
     "no valid visual c++ toolchain",
     "unable to find valid c++ toolchain",
     "windows sdk must be installed",
     "could not find a valid windows sdk",
+    "you must install or update .net to run this application",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,7 +30,7 @@ pub enum ToolExit {
 pub fn run_build_tool(
     build_tool: &Path,
     arguments: &[OsString],
-    working_directory: &Path,
+    engine_root: &Path,
     log_path: &Path,
     cancel: &AtomicBool,
     on_line: &mut dyn FnMut(&str),
@@ -45,10 +47,11 @@ pub fn run_build_tool(
     let mut command = Command::new(build_tool);
     command
         .args(arguments)
-        .current_dir(working_directory)
+        .current_dir(engine_root)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(error_log));
+    dotnet::configure_build_tool(&mut command, engine_root);
     platform::configure_hidden(&mut command);
     let mut child = command.spawn().with_context(|| {
         trf!(
@@ -330,6 +333,9 @@ mod tests {
         ));
         assert!(is_toolchain_failure(
             "No valid Visual C++ toolchain was found (minimum version 14.38.33130)."
+        ));
+        assert!(is_toolchain_failure(
+            "You must install or update .NET to run this application."
         ));
         assert!(!is_toolchain_failure(
             "Using Visual Studio 2022 14.44.35211 toolchain and Windows 10.0.22621.0 SDK\nerror C2065: undeclared identifier"
