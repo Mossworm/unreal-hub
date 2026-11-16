@@ -13,6 +13,7 @@ const BUILD_TOOLS_BOOTSTRAPPER_URL: &str = "https://aka.ms/vs/17/release/vs_buil
 const BUILD_TOOLS_BOOTSTRAPPER_NAME: &str = "vs_buildtools.exe";
 const BUILD_TOOLS_WORKLOAD: &str = "Microsoft.VisualStudio.Workload.VCTools";
 const MSVC_COMPONENT: &str = "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
+const NETFX_SDK_COMPONENT: &str = "Microsoft.Net.Component.4.8.SDK";
 const SDK_COMPONENT_PREFIX: &str = "Microsoft.VisualStudio.Component.Windows";
 const DEFAULT_SDK_COMPONENT: &str = "Microsoft.VisualStudio.Component.Windows11SDK.22621";
 const FIRST_WINDOWS_11_SDK_BUILD: u32 = 22000;
@@ -60,6 +61,11 @@ impl ToolVersion {
         build
     }
 }
+
+pub const MINIMUM_NETFX_SDK: ToolVersion = ToolVersion {
+    parts: [4, 6, 0, 0],
+    length: 3,
+};
 
 impl PartialEq for ToolVersion {
     fn eq(&self, other: &Self) -> bool {
@@ -290,6 +296,7 @@ impl ComponentState {
 pub struct ToolchainStatus {
     pub compiler: ComponentState,
     pub windows_sdk: ComponentState,
+    pub netfx_sdk: ComponentState,
     pub dotnet: ComponentState,
     pub instances: Vec<VisualStudioInstance>,
 }
@@ -300,6 +307,7 @@ impl ToolchainStatus {
         Self {
             compiler: ComponentState::NotRequired,
             windows_sdk: ComponentState::NotRequired,
+            netfx_sdk: ComponentState::NotRequired,
             dotnet: ComponentState::NotRequired,
             instances: Vec::new(),
         }
@@ -310,7 +318,7 @@ impl ToolchainStatus {
     }
 
     pub fn is_ready(&self) -> bool {
-        self.has_cpp_tools() && self.dotnet.is_satisfied()
+        self.has_cpp_tools() && self.netfx_sdk.is_satisfied() && self.dotnet.is_satisfied()
     }
 }
 
@@ -318,6 +326,7 @@ pub fn evaluate(
     requirements: &ToolchainRequirements,
     instances: Vec<VisualStudioInstance>,
     sdk_versions: &[ToolVersion],
+    netfx_sdk_versions: &[ToolVersion],
 ) -> ToolchainStatus {
     let compiler = instances
         .iter()
@@ -330,9 +339,15 @@ pub fn evaluate(
         .copied()
         .filter(|version| requirements.allows_sdk(*version))
         .max();
+    let netfx_sdk = netfx_sdk_versions
+        .iter()
+        .copied()
+        .filter(|version| *version >= MINIMUM_NETFX_SDK)
+        .max();
     ToolchainStatus {
         compiler: compiler.map_or(ComponentState::Missing, ComponentState::Found),
         windows_sdk: windows_sdk.map_or(ComponentState::Missing, ComponentState::Found),
+        netfx_sdk: netfx_sdk.map_or(ComponentState::Missing, ComponentState::Found),
         dotnet: ComponentState::NotRequired,
         instances,
     }
@@ -373,7 +388,8 @@ pub fn plan_install(requirements: &ToolchainRequirements, status: &ToolchainStat
         }),
         _ => None,
     };
-    let only_dotnet_missing = dotnet.is_some() && status.has_cpp_tools();
+    let only_dotnet_missing =
+        dotnet.is_some() && status.has_cpp_tools() && status.netfx_sdk.is_satisfied();
     InstallPlan {
         visual_studio: (!only_dotnet_missing).then(|| plan_visual_studio(requirements, status)),
         dotnet,
@@ -408,6 +424,7 @@ pub fn plan_visual_studio(
                 BUILD_TOOLS_WORKLOAD.to_string(),
                 MSVC_COMPONENT.to_string(),
                 requirements.sdk_component.clone(),
+                NETFX_SDK_COMPONENT.to_string(),
             ],
         };
     };
@@ -423,6 +440,7 @@ pub fn plan_visual_studio(
         components: vec![
             MSVC_COMPONENT.to_string(),
             requirements.sdk_component.clone(),
+            NETFX_SDK_COMPONENT.to_string(),
         ],
         update_first: outdated || only_unusable_compilers,
     }
@@ -828,9 +846,10 @@ mod tests {
     #[test]
     fn evaluates_missing_toolchain() {
         let requirements = parse_requirements(UE_5_8_SDK).unwrap();
-        let status = evaluate(&requirements, Vec::new(), &[]);
+        let status = evaluate(&requirements, Vec::new(), &[], &[]);
         assert_eq!(status.compiler, ComponentState::Missing);
         assert_eq!(status.windows_sdk, ComponentState::Missing);
+        assert_eq!(status.netfx_sdk, ComponentState::Missing);
         assert!(!status.is_ready());
         assert_eq!(
             plan_visual_studio(&requirements, &status),
@@ -839,6 +858,7 @@ mod tests {
                     "Microsoft.VisualStudio.Workload.VCTools".into(),
                     "Microsoft.VisualStudio.Component.VC.Tools.x86.x64".into(),
                     "Microsoft.VisualStudio.Component.Windows11SDK.22621".into(),
+                    "Microsoft.Net.Component.4.8.SDK".into(),
                 ]
             }
         );
@@ -851,6 +871,7 @@ mod tests {
             &requirements,
             vec![instance("17.14.36015.10", &["14.40.33807", "14.44.35211"])],
             &[version("10.0.18362.0"), version("10.0.22621.0")],
+            &[version("4.8")],
         );
         assert_eq!(
             status.compiler,
@@ -870,6 +891,7 @@ mod tests {
             &requirements,
             vec![instance("18.0.11111.0", &["14.50.35723"])],
             &[version("10.0.22621.0")],
+            &[version("4.8")],
         );
         assert_eq!(status.compiler, ComponentState::Missing);
         assert!(matches!(
@@ -881,14 +903,20 @@ mod tests {
     #[test]
     fn plans_modify_for_existing_visual_studio_2022() {
         let requirements = parse_requirements(UE_5_8_SDK).unwrap();
-        let without_cpp = evaluate(&requirements, vec![instance("17.14.36015.10", &[])], &[]);
+        let without_cpp = evaluate(
+            &requirements,
+            vec![instance("17.14.36015.10", &[])],
+            &[],
+            &[],
+        );
         match plan_visual_studio(&requirements, &without_cpp) {
             VisualStudioPlan::Modify {
                 components,
                 update_first,
                 ..
             } => {
-                assert_eq!(components.len(), 2);
+                assert_eq!(components.len(), 3);
+                assert!(components.contains(&"Microsoft.Net.Component.4.8.SDK".to_string()));
                 assert!(!update_first);
             }
             other => panic!("unexpected plan {other:?}"),
@@ -896,6 +924,7 @@ mod tests {
         let banned_only = evaluate(
             &requirements,
             vec![instance("17.10.0", &["14.40.33807"])],
+            &[],
             &[],
         );
         assert!(matches!(
@@ -918,6 +947,7 @@ mod tests {
             &requirements,
             vec![instance("17.14.36015.10", &["14.44.35211"])],
             &[version("10.0.22621.0")],
+            &[version("4.8")],
         );
         assert!(status.is_ready());
         status.dotnet = ComponentState::Missing;
@@ -936,7 +966,7 @@ mod tests {
             InstallProgress::Downloading { .. }
         ));
 
-        let mut missing_everything = evaluate(&requirements, Vec::new(), &[]);
+        let mut missing_everything = evaluate(&requirements, Vec::new(), &[], &[]);
         missing_everything.dotnet = ComponentState::Missing;
         let plan = plan_install(&requirements, &missing_everything);
         assert!(plan.dotnet.is_some());
@@ -950,6 +980,33 @@ mod tests {
         assert_eq!(forced.dotnet, None);
         assert!(forced.visual_studio.is_some());
         assert_eq!(forced.first_progress(), InstallProgress::Verifying);
+    }
+
+    #[test]
+    fn requires_a_supported_dotnet_framework_sdk() {
+        let requirements = parse_requirements(UE_5_8_SDK).unwrap();
+        let instances = vec![instance("17.14.36015.10", &["14.44.35211"])];
+        let windows_sdks = [version("10.0.22621.0")];
+        let old_netfx_sdk = evaluate(
+            &requirements,
+            instances.clone(),
+            &windows_sdks,
+            &[version("4.5.2")],
+        );
+        assert_eq!(old_netfx_sdk.netfx_sdk, ComponentState::Missing);
+        assert!(!old_netfx_sdk.is_ready());
+
+        let supported_netfx_sdk = evaluate(
+            &requirements,
+            instances,
+            &windows_sdks,
+            &[version("4.6"), version("4.8")],
+        );
+        assert_eq!(
+            supported_netfx_sdk.netfx_sdk,
+            ComponentState::Found(version("4.8"))
+        );
+        assert!(supported_netfx_sdk.is_ready());
     }
 
     #[test]

@@ -510,16 +510,16 @@ impl BuildDialog {
                 update_first: true,
                 ..
             } => trf!(
-                "설치된 {display_name}을(를) 최신 버전으로 업데이트한 뒤 C++ 빌드 도구와 Windows SDK를 추가합니다.",
-                "Updates the installed {display_name}, then adds the C++ build tools and Windows SDK."
+                "설치된 {display_name}을(를) 최신 버전으로 업데이트한 뒤 C++ 빌드 도구, Windows SDK, .NET Framework SDK를 추가합니다.",
+                "Updates the installed {display_name}, then adds the C++ build tools, Windows SDK and .NET Framework SDK."
             ),
             VisualStudioPlan::Modify { display_name, .. } => trf!(
-                "설치된 {display_name}에 C++ 빌드 도구와 Windows SDK를 추가합니다.",
-                "Adds the C++ build tools and Windows SDK to the installed {display_name}."
+                "설치된 {display_name}에 C++ 빌드 도구, Windows SDK, .NET Framework SDK를 추가합니다.",
+                "Adds the C++ build tools, Windows SDK and .NET Framework SDK to the installed {display_name}."
             ),
             VisualStudioPlan::Fresh { .. } => tr!(
-                "Visual Studio 2022 Build Tools를 설치합니다. 편집기 없이 C++ 빌드에 필요한 도구만 설치하며, 수 GB를 내려받아 수십 분 정도 걸릴 수 있습니다.",
-                "Installs Visual Studio 2022 Build Tools: only the tools needed to build C++, without the IDE. It downloads several GB and can take tens of minutes."
+                "Visual Studio 2022 Build Tools를 설치합니다. 편집기 없이 C++ 빌드 도구와 Windows SDK, .NET Framework SDK를 설치하며 수 GB를 내려받아 수십 분 정도 걸릴 수 있습니다.",
+                "Installs Visual Studio 2022 Build Tools with the C++ build tools, Windows SDK and .NET Framework SDK, without the IDE. It downloads several GB and can take tens of minutes."
             )
             .to_string(),
         }
@@ -534,6 +534,10 @@ impl BuildDialog {
             .status
             .as_ref()
             .map_or(ComponentState::Missing, |status| status.windows_sdk);
+        let netfx_sdk = self
+            .status
+            .as_ref()
+            .map_or(ComponentState::NotRequired, |status| status.netfx_sdk);
         let dotnet = self
             .status
             .as_ref()
@@ -578,6 +582,14 @@ impl BuildDialog {
                         windows_sdk,
                         self.requirements.minimum_sdk.map(|version| version.to_string()),
                     ))
+                    .when(netfx_sdk != ComponentState::NotRequired, |this| {
+                        this.child(self.requirement_row(
+                            theme,
+                            ".NET Framework SDK",
+                            netfx_sdk,
+                            Some(toolchain::MINIMUM_NETFX_SDK.to_string()),
+                        ))
+                    })
                     .when(dotnet != ComponentState::NotRequired, |this| {
                         this.child(self.requirement_row(
                             theme,
@@ -703,8 +715,8 @@ impl BuildDialog {
                 .gap_3()
                 .child(error_note(theme, message.clone()))
                 .child(div().text_color(theme.text_muted).child(tr!(
-                    "다시 확인하거나 다운로드 페이지에서 'Build Tools for Visual Studio 2022'를 직접 설치할 수 있습니다. 설치할 때 'C++를 사용한 데스크톱 개발'을 선택하세요.",
-                    "Check again, or install 'Build Tools for Visual Studio 2022' from the download page. Select 'Desktop development with C++' when installing."
+                    "다시 확인하거나 'Build Tools for Visual Studio 2022' 설치 관리자에서 'C++를 사용한 데스크톱 개발'과 '.NET Framework 4.8 SDK'를 선택하세요.",
+                    "Check again, or use the 'Build Tools for Visual Studio 2022' installer to select 'Desktop development with C++' and '.NET Framework 4.8 SDK'."
                 )))
                 .into_any_element(),
             Phase::ToolsReady { reboot_required } => div()

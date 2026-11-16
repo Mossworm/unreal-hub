@@ -11,12 +11,14 @@ use std::time::Duration;
 const BUILD_LOG: &str = "UnrealHub-Build.log";
 const TARGET_SUFFIX: &str = ".target.cs";
 const EDITOR_TARGET_TYPE: &str = "TargetType.Editor";
-const TOOLCHAIN_FAILURE_MARKERS: [&str; 6] = [
+const TOOLCHAIN_FAILURE_MARKERS: [&str; 8] = [
     "must be installed in order to build this target",
     "no valid visual c++ toolchain",
     "unable to find valid c++ toolchain",
     "windows sdk must be installed",
     "could not find a valid windows sdk",
+    "could not find netfxsdk install dir",
+    "install a version of .net framework sdk",
     "you must install or update .net to run this application",
 ];
 
@@ -333,6 +335,9 @@ mod tests {
         ));
         assert!(is_toolchain_failure(
             "No valid Visual C++ toolchain was found (minimum version 14.38.33130)."
+        ));
+        assert!(is_toolchain_failure(
+            "Could not find NetFxSDK install dir; this will prevent SwarmInterface from installing."
         ));
         assert!(is_toolchain_failure(
             "You must install or update .NET to run this application."

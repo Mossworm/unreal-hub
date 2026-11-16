@@ -47,6 +47,7 @@ pub const DOTNET_ARCHITECTURE_ROOT_VARIABLES: &[&str] =
     &["DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_ROOT(x86)"];
 
 const WINDOWS_KITS_KEY: &str = r"SOFTWARE\Microsoft\Windows Kits\Installed Roots";
+const NETFX_SDK_KEY: &str = r"SOFTWARE\Microsoft\Microsoft SDKs\NETFXSDK";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "UnrealHub";
 const SINGLE_INSTANCE_MUTEX: &str = "Local\\UnrealHub-SingleInstance";
@@ -371,11 +372,33 @@ fn windows_sdk_versions() -> Vec<ToolVersion> {
     versions
 }
 
+fn netfx_sdk_versions() -> Vec<ToolVersion> {
+    let machine = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(sdk_key) = machine.open_subkey_with_flags(NETFX_SDK_KEY, KEY_READ | KEY_WOW64_32KEY)
+    else {
+        return Vec::new();
+    };
+    sdk_key
+        .enum_keys()
+        .flatten()
+        .filter_map(|version_name| {
+            let version = ToolVersion::parse(&version_name)?;
+            if version < crate::toolchain::MINIMUM_NETFX_SDK {
+                return None;
+            }
+            let version_key = sdk_key.open_subkey(version_name).ok()?;
+            let install_directory: String = version_key.get_value("KitsInstallationFolder").ok()?;
+            PathBuf::from(install_directory).is_dir().then_some(version)
+        })
+        .collect()
+}
+
 pub fn inspect_toolchain(requirements: &ToolchainRequirements) -> ToolchainStatus {
     evaluate(
         requirements,
         visual_studio_instances(),
         &windows_sdk_versions(),
+        &netfx_sdk_versions(),
     )
 }
 
