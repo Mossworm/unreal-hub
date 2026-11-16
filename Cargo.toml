@@ -23,7 +23,7 @@ sysinfo = { version = "0.40.3", default-features = false, features = ["system"] 
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "tracing-log"] }
-trash = "5.3.0"
+trash = { version = "5.3.0", default-features = false, features = ["coinit_multithreaded", "chrono", "freedesktop"] }
 tray-icon = "0.26.1"
 unicode-segmentation = "1.13.3"
 ureq = "3.5.2"
