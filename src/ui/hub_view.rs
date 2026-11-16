@@ -3,6 +3,7 @@ use crate::platform;
 use crate::state::{HubEvent, HubState, LaunchOutcome, Toast, ToastKind, UpdateStatus};
 use crate::storage::{Tab, WindowPlacement};
 use crate::tray::{self, Tray, TrayCommand, TraySignal};
+use crate::ui::build_dialog::BuildDialog;
 use crate::ui::components::{Button, Icon, IconButton, icon};
 use crate::ui::dialogs::{
     CacheCleanupDialog, ChangeEngineDialog, ChangeEngineMode, DialogEvent, RemoveEngineDialog,
@@ -32,6 +33,7 @@ enum Modal {
     CacheCleanup(Entity<CacheCleanupDialog>),
     RemoveEngine(Entity<RemoveEngineDialog>),
     NewProject(Entity<NewProjectDialog>),
+    Build(Entity<BuildDialog>),
 }
 
 impl Modal {
@@ -42,6 +44,7 @@ impl Modal {
             Modal::CacheCleanup(view) => view.clone().into(),
             Modal::RemoveEngine(view) => view.clone().into(),
             Modal::NewProject(view) => view.clone().into(),
+            Modal::Build(view) => view.clone().into(),
         }
     }
 
@@ -52,6 +55,7 @@ impl Modal {
             Modal::CacheCleanup(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
             Modal::RemoveEngine(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
             Modal::NewProject(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
+            Modal::Build(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
         }
     }
 
@@ -424,6 +428,12 @@ impl HubView {
                 let key = key.clone();
                 let dialog = cx.new(|cx| CacheCleanupDialog::new(state, key, cx));
                 self.show_modal(Modal::CacheCleanup(dialog.clone()), &dialog, window, cx);
+            }
+            ProjectsEvent::Build(key) => {
+                let state = self.state.clone();
+                let key = key.clone();
+                let dialog = cx.new(|cx| BuildDialog::new(state, key, cx));
+                self.show_modal(Modal::Build(dialog.clone()), &dialog, window, cx);
             }
         }
     }

@@ -2,7 +2,8 @@ use crate::engines::EngineResolution;
 use crate::projects::{ProjectPresence, ProjectRow, SortColumn, visible_row_indices};
 use crate::state::{HubState, LaunchOutcome, ToastKind};
 use crate::ui::components::{
-    Button, Icon, IconButton, badge, icon, menu_container, menu_item, running_badge, tooltip,
+    Button, Icon, IconButton, badge, icon, menu_container, menu_item, menu_separator,
+    running_badge, tooltip,
 };
 use crate::ui::text_input::{TextInput, TextInputEvent};
 use crate::ui::theme::Theme;
@@ -25,6 +26,7 @@ pub enum ProjectsEvent {
     ChangeEngine(String),
     MissingEngine(String),
     CleanCache(String),
+    Build(String),
 }
 
 struct RowMenu {
@@ -466,9 +468,31 @@ impl ProjectsView {
             )
             .into(),
         );
+        let engine_missing = row
+            .resolution
+            .as_ref()
+            .and_then(|resolution| resolution.engine_key())
+            .and_then(|engine_key| state.engine(engine_key))
+            .is_none();
+        let build_reason: Option<SharedString> = if running {
+            running_reason.clone()
+        } else if engine_missing {
+            Some(
+                tr!(
+                    "프로젝트의 엔진을 찾을 수 없습니다",
+                    "The project's engine was not found"
+                )
+                .into(),
+            )
+        } else {
+            None
+        };
+        let build_disabled = running || unavailable || engine_missing;
+        let is_cpp = row.is_cpp;
         let reveal_path = row.path.clone();
         let change_key = row.key.clone();
         let clean_key = row.key.clone();
+        let build_key = row.key.clone();
         Some(
             deferred(
                 anchored()
@@ -537,7 +561,28 @@ impl ProjectsView {
                                         }))
                                     },
                                 ),
-                            ),
+                            )
+                            .when(is_cpp, |this| {
+                                this.child(menu_separator(theme)).child(
+                                    menu_item(
+                                        "menu-build",
+                                        tr!("빌드…", "Build…"),
+                                        build_disabled,
+                                        build_reason,
+                                        theme,
+                                    )
+                                    .when(
+                                        !build_disabled,
+                                        |this| {
+                                            this.on_click(cx.listener(move |this, _, _, cx| {
+                                                this.row_menu = None;
+                                                cx.emit(ProjectsEvent::Build(build_key.clone()));
+                                                cx.notify();
+                                            }))
+                                        },
+                                    ),
+                                )
+                            }),
                     ),
             )
             .with_priority(1)

@@ -175,46 +175,15 @@ pub fn download_installer(
     })?;
     let destination = directory.join(safe_file_name(&release.installer_name));
     let partial = directory.join(format!("{}.part", safe_file_name(&release.installer_name)));
-    let mut response = agent(Duration::from_secs(30 * 60))
-        .get(&release.installer_url)
-        .call()
-        .context(tr!(
-            "설치 파일을 내려받지 못했습니다",
-            "Failed to download the installer"
-        ))?;
-    let total = response.body().content_length().or(release.size);
-    let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
-    let mut file = std::fs::File::create(&partial).with_context(|| {
-        trf!(
-            "{}을(를) 쓸 수 없습니다",
-            "Cannot write {}",
-            partial.display()
-        )
-    })?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut received = 0u64;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            drop(file);
-            remove_quietly(&partial);
-            return Err(tr_anyhow!("다운로드를 취소했습니다", "Download cancelled"));
-        }
-        let read = reader.read(&mut buffer).context(tr!(
-            "설치 파일을 내려받지 못했습니다",
-            "Failed to download the installer"
-        ))?;
-        if read == 0 {
-            break;
-        }
-        let chunk = buffer.get(..read).unwrap_or_default();
-        file.write_all(chunk)?;
-        hasher.update(chunk);
-        received += read as u64;
-        progress(received, total);
-    }
-    file.sync_all()?;
-    drop(file);
+    download_to_partial(
+        &release.installer_url,
+        &partial,
+        release.size,
+        cancel,
+        progress,
+        &mut |chunk| hasher.update(chunk),
+    )?;
     let actual: String = hasher
         .finalize()
         .iter()
@@ -229,11 +198,78 @@ pub fn download_installer(
             "The installer checksum does not match"
         ));
     }
-    if destination.exists() {
-        std::fs::remove_file(&destination)?;
-    }
-    std::fs::rename(&partial, &destination)?;
+    replace_with_partial(&partial, &destination)?;
     Ok(destination)
+}
+
+pub fn download_file(
+    url: &str,
+    destination: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<()> {
+    let mut partial_name = destination.as_os_str().to_owned();
+    partial_name.push(".part");
+    let partial = PathBuf::from(partial_name);
+    download_to_partial(url, &partial, None, cancel, progress, &mut |_| {})?;
+    replace_with_partial(&partial, destination)
+}
+
+fn download_to_partial(
+    url: &str,
+    partial: &Path,
+    expected_size: Option<u64>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    on_chunk: &mut dyn FnMut(&[u8]),
+) -> Result<()> {
+    let mut response = agent(Duration::from_secs(30 * 60))
+        .get(url)
+        .call()
+        .context(tr!(
+            "설치 파일을 내려받지 못했습니다",
+            "Failed to download the installer"
+        ))?;
+    let total = response.body().content_length().or(expected_size);
+    let mut reader = response.body_mut().with_config().limit(u64::MAX).reader();
+    let mut file = std::fs::File::create(partial).with_context(|| {
+        trf!(
+            "{}을(를) 쓸 수 없습니다",
+            "Cannot write {}",
+            partial.display()
+        )
+    })?;
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut received = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            drop(file);
+            remove_quietly(partial);
+            return Err(tr_anyhow!("다운로드를 취소했습니다", "Download cancelled"));
+        }
+        let read = reader.read(&mut buffer).context(tr!(
+            "설치 파일을 내려받지 못했습니다",
+            "Failed to download the installer"
+        ))?;
+        if read == 0 {
+            break;
+        }
+        let chunk = buffer.get(..read).unwrap_or_default();
+        file.write_all(chunk)?;
+        on_chunk(chunk);
+        received += read as u64;
+        progress(received, total);
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+fn replace_with_partial(partial: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        std::fs::remove_file(destination)?;
+    }
+    std::fs::rename(partial, destination)?;
+    Ok(())
 }
 
 fn remove_quietly(path: &Path) {

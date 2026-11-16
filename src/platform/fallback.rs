@@ -1,8 +1,10 @@
+use crate::toolchain::{ToolchainRequirements, ToolchainStatus};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const EDITOR_CONFIG_PLATFORM: &str = "LinuxEditor";
+pub const BUILD_PLATFORM: &str = "Linux";
 
 pub fn launcher_installed_dat_path() -> Option<PathBuf> {
     None
@@ -97,6 +99,38 @@ pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
 
 pub fn has_cpp_toolchain() -> bool {
     true
+}
+
+pub fn inspect_toolchain(_requirements: &ToolchainRequirements) -> ToolchainStatus {
+    ToolchainStatus::not_required()
+}
+
+pub fn visual_studio_setup() -> Option<PathBuf> {
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElevatedRun {
+    Exited(i32),
+    Declined,
+}
+
+pub fn run_elevated(
+    _executable: &Path,
+    _parameters: &str,
+    _working_directory: &Path,
+) -> Result<ElevatedRun> {
+    tr_bail!(
+        "이 플랫폼에서는 빌드 도구 설치를 지원하지 않습니다",
+        "Installing build tools is not supported on this platform"
+    )
+}
+
+pub fn verify_microsoft_signature(_path: &Path) -> Result<()> {
+    tr_bail!(
+        "이 플랫폼에서는 서명 확인을 지원하지 않습니다",
+        "Signature verification is not supported on this platform"
+    )
 }
 
 pub fn wait_for_process_exit(pid: u32) -> Result<()> {

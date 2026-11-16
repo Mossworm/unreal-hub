@@ -1,23 +1,38 @@
+use crate::toolchain::{
+    ToolVersion, ToolchainRequirements, ToolchainStatus, VisualStudioInstance, evaluate,
+    parse_vswhere_instances,
+};
 use anyhow::{Context as _, Result, bail};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_CANCELLED, GetLastError, HANDLE, HWND, LPARAM,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateMutexW, DETACHED_PROCESS, INFINITE,
-    OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateMutexW, DETACHED_PROCESS, GetExitCodeProcess,
+    INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+};
+use windows_sys::Win32::UI::Shell::{
+    SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    ShellExecuteExW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+    IsWindowVisible, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow,
 };
 use windows_sys::core::BOOL;
 use winreg::RegKey;
-use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
+use winreg::enums::{
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY,
+};
 
+pub const BUILD_PLATFORM: &str = "Win64";
+
+const WINDOWS_KITS_KEY: &str = r"SOFTWARE\Microsoft\Windows Kits\Installed Roots";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "UnrealHub";
 const SINGLE_INSTANCE_MUTEX: &str = "Local\\UnrealHub-SingleInstance";
@@ -162,18 +177,245 @@ pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-pub fn has_cpp_toolchain() -> bool {
-    let Some(installer) = std::env::var_os("ProgramFiles(x86)").map(|root| {
+fn visual_studio_installer_directory() -> Option<PathBuf> {
+    std::env::var_os("ProgramFiles(x86)").map(|root| {
         PathBuf::from(root)
             .join("Microsoft Visual Studio")
             .join("Installer")
-            .join("vswhere.exe")
-    }) else {
+    })
+}
+
+fn vswhere_path() -> Option<PathBuf> {
+    visual_studio_installer_directory()
+        .map(|directory| directory.join("vswhere.exe"))
+        .filter(|path| path.is_file())
+}
+
+pub fn visual_studio_setup() -> Option<PathBuf> {
+    visual_studio_installer_directory()
+        .map(|directory| directory.join("setup.exe"))
+        .filter(|path| path.is_file())
+}
+
+fn visual_studio_instances() -> Vec<VisualStudioInstance> {
+    let Some(vswhere) = vswhere_path() else {
+        return Vec::new();
+    };
+    let mut command = Command::new(vswhere);
+    command.args(["-products", "*", "-format", "json", "-utf8"]);
+    configure_hidden(&mut command);
+    let output = match command.output() {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            log::warn!("vswhere exited with {}", output.status);
+            return Vec::new();
+        }
+        Err(error) => {
+            log::warn!("vswhere failed: {error}");
+            return Vec::new();
+        }
+    };
+    let summaries = match parse_vswhere_instances(&String::from_utf8_lossy(&output.stdout)) {
+        Ok(summaries) => summaries,
+        Err(error) => {
+            log::warn!("{error:#}");
+            return Vec::new();
+        }
+    };
+    summaries
+        .into_iter()
+        .map(|summary| VisualStudioInstance {
+            msvc_versions: msvc_versions(&summary.install_path),
+            install_path: summary.install_path,
+            version: summary.version,
+            display_name: summary.display_name,
+        })
+        .collect()
+}
+
+fn msvc_versions(install_path: &Path) -> Vec<ToolVersion> {
+    let tools = install_path.join("VC").join("Tools").join("MSVC");
+    let Ok(entries) = std::fs::read_dir(&tools) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .join("bin")
+                .join("Hostx64")
+                .join("x64")
+                .join("cl.exe")
+                .is_file()
+        })
+        .filter_map(|entry| ToolVersion::parse(&entry.file_name().to_string_lossy()))
+        .collect()
+}
+
+fn windows_kits_roots() -> Vec<PathBuf> {
+    let machine = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let mut roots: Vec<PathBuf> = [KEY_READ, KEY_READ | KEY_WOW64_32KEY]
+        .into_iter()
+        .filter_map(|flags| {
+            let key = machine
+                .open_subkey_with_flags(WINDOWS_KITS_KEY, flags)
+                .ok()?;
+            let root: String = key.get_value("KitsRoot10").ok()?;
+            let root = root.trim();
+            (!root.is_empty()).then(|| PathBuf::from(root))
+        })
+        .collect();
+    if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
+        roots.push(PathBuf::from(program_files).join("Windows Kits").join("10"));
+    }
+    roots.dedup();
+    roots
+}
+
+fn windows_sdk_versions() -> Vec<ToolVersion> {
+    let mut versions: Vec<ToolVersion> = windows_kits_roots()
+        .iter()
+        .flat_map(|root| {
+            let include = root.join("Include");
+            let library = root.join("Lib");
+            std::fs::read_dir(&include)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(move |entry| {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let has_headers = entry.path().join("um").join("Windows.h").is_file();
+                    let has_libraries = library.join(&name).join("um").join("x64").is_dir();
+                    if has_headers && has_libraries {
+                        ToolVersion::parse(&name)
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect();
+    versions.sort();
+    versions.dedup();
+    versions
+}
+
+pub fn inspect_toolchain(requirements: &ToolchainRequirements) -> ToolchainStatus {
+    evaluate(
+        requirements,
+        visual_studio_instances(),
+        &windows_sdk_versions(),
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ElevatedRun {
+    Exited(i32),
+    Declined,
+}
+
+fn wide(text: &OsStr) -> Vec<u16> {
+    text.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+pub fn run_elevated(
+    executable: &Path,
+    parameters: &str,
+    working_directory: &Path,
+) -> Result<ElevatedRun> {
+    let verb = wide(OsStr::new("runas"));
+    let file = wide(executable.as_os_str());
+    let parameters = wide(OsStr::new(parameters));
+    let directory = wide(working_directory.as_os_str());
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.lpDirectory = directory.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    let started = unsafe { ShellExecuteExW(&mut info) };
+    if started == 0 {
+        let error = unsafe { GetLastError() };
+        if error == ERROR_CANCELLED {
+            return Ok(ElevatedRun::Declined);
+        }
+        tr_bail!(
+            "{} 실행에 실패했습니다 (오류 {error})",
+            "Failed to start {} (error {error})",
+            executable.display()
+        );
+    }
+    if info.hProcess.is_null() {
+        bail!("{} started without a process handle", executable.display());
+    }
+    let mut exit_code = 0u32;
+    let read = unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        let read = GetExitCodeProcess(info.hProcess, &mut exit_code);
+        CloseHandle(info.hProcess);
+        read
+    };
+    if read == 0 {
+        bail!("Cannot read the exit code of {}", executable.display());
+    }
+    Ok(ElevatedRun::Exited(exit_code as i32))
+}
+
+pub fn verify_microsoft_signature(path: &Path) -> Result<()> {
+    let powershell = std::env::var_os("SystemRoot")
+        .map(|root| {
+            PathBuf::from(root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|path| path.is_file())
+        .ok_or_else(|| anyhow::anyhow!("powershell.exe not found"))?;
+    let mut command = Command::new(powershell);
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$signature = Get-AuthenticodeSignature -LiteralPath $env:UNREAL_HUB_SIGNED_FILE; \
+             [Console]::Out.Write([string]$signature.Status + '|' + $signature.SignerCertificate.Subject)",
+        ])
+        .env("UNREAL_HUB_SIGNED_FILE", path);
+    configure_hidden(&mut command);
+    let output = command
+        .output()
+        .context("Cannot run Get-AuthenticodeSignature")?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (status, subject) = text.trim().split_once('|').unwrap_or((text.trim(), ""));
+    if output.status.success() && is_trusted_microsoft_signature(status, subject) {
+        return Ok(());
+    }
+    log::error!(
+        "Signature check failed for {}: {}",
+        path.display(),
+        text.trim()
+    );
+    tr_bail!(
+        "{}의 Microsoft 서명을 확인할 수 없습니다",
+        "Cannot verify the Microsoft signature of {}",
+        path.display()
+    )
+}
+
+fn is_trusted_microsoft_signature(status: &str, subject: &str) -> bool {
+    status.trim() == "Valid"
+        && subject
+            .split(',')
+            .any(|part| part.trim() == "O=Microsoft Corporation")
+}
+
+pub fn has_cpp_toolchain() -> bool {
+    let Some(installer) = vswhere_path() else {
         return false;
     };
-    if !installer.is_file() {
-        return false;
-    }
     let mut command = Command::new(installer);
     command.args([
         "-products",
@@ -387,5 +629,23 @@ pub fn activate_existing_instance(title: &str) -> bool {
         };
         ShowWindow(search.found, command);
         SetForegroundWindow(search.found) != 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_valid_microsoft_signatures() {
+        let subject =
+            "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US";
+        assert!(is_trusted_microsoft_signature("Valid", subject));
+        assert!(!is_trusted_microsoft_signature("HashMismatch", subject));
+        assert!(!is_trusted_microsoft_signature(
+            "Valid",
+            "CN=Microsoft Corporation Fake, O=Contoso"
+        ));
+        assert!(!is_trusted_microsoft_signature("NotSigned", ""));
     }
 }

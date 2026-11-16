@@ -1,3 +1,4 @@
+pub mod build_dialog;
 pub mod components;
 pub mod dialogs;
 pub mod hub_view;

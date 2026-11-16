@@ -1,12 +1,12 @@
 use crate::platform;
+use crate::project_build::{ToolExit, run_build_tool};
 use crate::templates::{Replacement, Template, TemplateDefs, TemplateSetting};
 use crate::unreal::EngineVersion;
 use anyhow::{Context as _, Result, anyhow};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 pub const MAX_PROJECT_NAME_LENGTH: usize = 20;
 const MAX_PROJECT_PATH_LENGTH: usize = 130;
@@ -1142,8 +1142,6 @@ fn generate_project_files(
         .ok_or_else(|| tr_anyhow!("프로젝트 폴더를 알 수 없습니다", "Unknown project folder"))?;
     std::fs::create_dir_all(&log_directory)?;
     let log_path = log_directory.join(PROJECT_FILES_LOG);
-    let log_file = std::fs::File::create(&log_path)?;
-    let error_log = log_file.try_clone()?;
     let distribution_flag = if engine_root
         .join("Engine")
         .join("Build")
@@ -1154,58 +1152,29 @@ fn generate_project_files(
     } else {
         "-rocket"
     };
-    let mut command = std::process::Command::new(&build_tool);
-    command
-        .arg("-projectfiles")
-        .arg(format!("-project={}", project_file.display()))
-        .arg("-game")
-        .arg(distribution_flag)
-        .arg("-progress")
-        .current_dir(engine_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(error_log));
-    platform::configure_hidden(&mut command);
-    let mut child = command.spawn().with_context(|| {
-        trf!(
-            "{} 실행에 실패했습니다",
-            "Failed to start {}",
-            build_tool.display()
-        )
-    })?;
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            if let Err(error) = child.kill() {
-                log::warn!("Cannot stop UnrealBuildTool: {error}");
-            }
-            if let Err(error) = child.wait() {
-                log::warn!("Cannot reap UnrealBuildTool: {error}");
-            }
-            return Err(Cancelled.into());
-        }
-        if let Some(status) = child.try_wait()? {
-            if status.success() {
-                return Ok(());
-            }
-            let tail = std::fs::read_to_string(&log_path)
-                .map(|text| {
-                    text.lines()
-                        .rev()
-                        .filter(|line| !line.trim().is_empty())
-                        .take(3)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect::<Vec<_>>()
-                        .join(" / ")
-                })
-                .unwrap_or_default();
-            tr_bail!(
-                "UnrealBuildTool 종료 코드 {status}: {tail}",
-                "UnrealBuildTool exited with {status}: {tail}"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(200));
+    let mut project_argument = OsString::from("-project=");
+    project_argument.push(project_file.as_os_str());
+    let arguments = [
+        OsString::from("-projectfiles"),
+        project_argument,
+        OsString::from("-game"),
+        OsString::from(distribution_flag),
+        OsString::from("-progress"),
+    ];
+    match run_build_tool(
+        &build_tool,
+        &arguments,
+        engine_root,
+        &log_path,
+        cancel,
+        &mut |_| {},
+    )? {
+        ToolExit::Succeeded => Ok(()),
+        ToolExit::Cancelled => Err(Cancelled.into()),
+        ToolExit::Failed { status, tail } => tr_bail!(
+            "UnrealBuildTool 종료 코드 {status}: {tail}",
+            "UnrealBuildTool exited with {status}: {tail}"
+        ),
     }
 }
 
