@@ -10,6 +10,14 @@
 - **프로젝트 관리:** 새 프로젝트 생성, 엔진 버전 변경(`.uproject` 백업 포함), 캐시 정리(휴지통으로 이동).
 - **편의 기능:** 한국어·영어 UI, 시스템 트레이, Windows 시작 시 자동 실행, GitHub Releases 기반 자동 업데이트.
 
+## 스크린샷
+
+| 프로젝트 목록 | 설치된 엔진 |
+| --- | --- |
+| ![프로젝트 목록](docs/screenshots/projects.png) | ![설치된 엔진](docs/screenshots/installs.png) |
+| **새 프로젝트** | **설정** |
+| ![새 프로젝트](docs/screenshots/new-project.png) | ![설정](docs/screenshots/settings.png) |
+
 ## 요구 사항
 
 - Windows 10 이상 (x64)
