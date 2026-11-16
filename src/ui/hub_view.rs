@@ -607,7 +607,7 @@ impl HubView {
                     .gap_2()
                     .pl_3()
                     .window_control_area(WindowControlArea::Drag)
-                    .child(icon(Icon::Logo, 1.1, theme.accent))
+                    .child(icon(Icon::Logo, 1.1, theme.text))
                     .child(
                         div()
                             .text_sm()
