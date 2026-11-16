@@ -9,15 +9,19 @@ use crate::storage::{
     CURRENT_SCHEMA_VERSION, ENGINES_FILE, EngineSizeRecord, EnginesFile, JsonFile, LoadedState,
     PROJECTS_FILE, PendingWrite, ProjectsFile, SETTINGS_FILE, Settings,
 };
+use crate::tray::RecentProject;
 use crate::unreal::{is_uproject, new_engine_identifier};
+use crate::updates;
 use crate::util::{ResultExt, unix_now};
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result};
 use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui::{AppContext as _, AsyncApp, Context, EventEmitter, SharedString, Task, WeakEntity};
 use notify::{EventKind, RecursiveMode, Watcher as _};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +135,35 @@ pub struct HubState {
     watcher_task: Option<Task<()>>,
     watch_events_task: Option<Task<()>>,
     startup_toasts: Vec<Toast>,
+    update_status: UpdateStatus,
+    update_checking: bool,
+    dismissed_update: Option<updates::Version>,
+    update_task: Option<Task<()>>,
+    update_cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for HubState {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.update_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateStatus {
+    Idle,
+    Available(updates::Release),
+    Downloading {
+        release: updates::Release,
+        received: u64,
+        total: Option<u64>,
+    },
+    Ready {
+        release: updates::Release,
+        installer: PathBuf,
+    },
+    Failed(String),
 }
 
 impl EventEmitter<HubEvent> for HubState {}
@@ -146,29 +179,37 @@ impl HubState {
         let mut startup_toasts = Vec::new();
         for (label, recovered, error) in [
             (
-                "설정",
+                tr!("설정", "Settings"),
                 settings.recovered_from_backup,
                 settings.error.as_ref(),
             ),
             (
-                "프로젝트 목록",
+                tr!("프로젝트 목록", "Project list"),
                 projects.recovered_from_backup,
                 projects.error.as_ref(),
             ),
             (
-                "엔진 목록",
+                tr!("엔진 목록", "Engine list"),
                 engines.recovered_from_backup,
                 engines.error.as_ref(),
             ),
         ] {
             if recovered {
                 startup_toasts.push(Toast {
-                    message: format!("{label} 파일이 손상되어 백업에서 복구했습니다").into(),
+                    message: trf!(
+                        "{label} 파일이 손상되어 백업에서 복구했습니다",
+                        "The {label} file was corrupted and restored from backup"
+                    )
+                    .into(),
                     kind: ToastKind::Info,
                 });
             } else if error.is_some() {
                 startup_toasts.push(Toast {
-                    message: format!("{label} 파일을 읽지 못해 초기화했습니다").into(),
+                    message: trf!(
+                        "{label} 파일을 읽지 못해 초기화했습니다",
+                        "The {label} file could not be read and was reset"
+                    )
+                    .into(),
                     kind: ToastKind::Error,
                 });
             }
@@ -217,6 +258,11 @@ impl HubState {
             watcher_task: None,
             watch_events_task: None,
             startup_toasts,
+            update_status: UpdateStatus::Idle,
+            update_checking: false,
+            dismissed_update: None,
+            update_task: None,
+            update_cancel: None,
         };
         state.rebuild_rows();
         state.refresh(
@@ -226,7 +272,235 @@ impl HubState {
             },
             cx,
         );
+        state.apply_launch_at_startup(false, cx);
+        if state.settings.check_updates_on_startup {
+            state.check_for_updates(false, cx);
+        }
         state
+    }
+
+    fn apply_launch_at_startup(&mut self, user_initiated: bool, cx: &mut Context<Self>) {
+        let enabled = self.settings.launch_at_startup;
+        if !enabled && !user_initiated {
+            return;
+        }
+        let work = cx.background_spawn(async move {
+            let executable = std::env::current_exe().context("Cannot locate the executable")?;
+            platform::set_launch_at_startup(enabled, &executable)
+        });
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = work.await {
+                log::error!("{error:#}");
+                if user_initiated {
+                    this.update(cx, |state, cx| {
+                        state.settings.launch_at_startup = !enabled;
+                        state.save_settings(cx);
+                        state.toast(format!("{error:#}"), ToastKind::Error, cx);
+                        cx.notify();
+                    })
+                    .log_err();
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub fn recent_projects(&self, limit: usize) -> Vec<RecentProject> {
+        let mut rows: Vec<&ProjectRow> = self
+            .rows
+            .iter()
+            .filter(|row| row.last_opened.is_some() && row.presence == ProjectPresence::Present)
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.last_opened));
+        rows.into_iter()
+            .take(limit)
+            .map(|row| RecentProject {
+                key: row.key.clone(),
+                name: row.name.clone(),
+            })
+            .collect()
+    }
+
+    pub fn visible_update(&self) -> Option<&UpdateStatus> {
+        match &self.update_status {
+            UpdateStatus::Idle => None,
+            UpdateStatus::Available(release) if self.dismissed_update == Some(release.version) => {
+                None
+            }
+            status => Some(status),
+        }
+    }
+
+    pub fn is_checking_for_updates(&self) -> bool {
+        self.update_checking
+    }
+
+    pub fn check_for_updates(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if self.update_checking
+            || matches!(
+                self.update_status,
+                UpdateStatus::Downloading { .. } | UpdateStatus::Ready { .. }
+            )
+        {
+            return;
+        }
+        self.update_checking = true;
+        cx.notify();
+        let work = cx.background_spawn(async move { updates::fetch_latest_release() });
+        self.update_task = Some(cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |state, cx| {
+                state.update_checking = false;
+                state.update_task = None;
+                match result {
+                    Ok(release) if release.version > updates::current_version() => {
+                        if manual {
+                            state.dismissed_update = None;
+                        }
+                        state.update_status = UpdateStatus::Available(release);
+                    }
+                    Ok(_) => {
+                        if manual {
+                            state.toast(
+                                trf!(
+                                    "최신 버전입니다 (v{})",
+                                    "You are on the latest version (v{})",
+                                    updates::current_version()
+                                ),
+                                ToastKind::Info,
+                                cx,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("Update check failed: {error:#}");
+                        if manual {
+                            state.toast(
+                                trf!(
+                                    "업데이트 확인 실패: {error:#}",
+                                    "Update check failed: {error:#}"
+                                ),
+                                ToastKind::Error,
+                                cx,
+                            );
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+        }));
+    }
+
+    pub fn dismiss_update(&mut self, cx: &mut Context<Self>) {
+        match &self.update_status {
+            UpdateStatus::Available(release) => {
+                self.dismissed_update = Some(release.version);
+            }
+            UpdateStatus::Failed(_) => self.update_status = UpdateStatus::Idle,
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    pub fn download_update(&mut self, cx: &mut Context<Self>) {
+        let release = match &self.update_status {
+            UpdateStatus::Available(release) => release.clone(),
+            _ => return,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (progress_sender, mut progress_receiver) = mpsc::unbounded::<(u64, Option<u64>)>();
+        let (result_sender, result_receiver) = oneshot::channel::<Result<PathBuf>>();
+        let worker_release = release.clone();
+        let worker_cancel = cancel.clone();
+        let spawned = std::thread::Builder::new()
+            .name("update-download".into())
+            .spawn(move || {
+                let result = updates::download_installer(
+                    &worker_release,
+                    &updates::update_directory(),
+                    &worker_cancel,
+                    &mut |received, total| {
+                        if progress_sender.unbounded_send((received, total)).is_err() {
+                            log::debug!("Download progress receiver closed");
+                        }
+                    },
+                );
+                drop(progress_sender);
+                if result_sender.send(result).is_err() {
+                    log::debug!("Download finished after the hub closed");
+                }
+            });
+        if let Err(error) = spawned {
+            self.update_status = UpdateStatus::Failed(format!("{error}"));
+            cx.notify();
+            return;
+        }
+        self.update_status = UpdateStatus::Downloading {
+            release: release.clone(),
+            received: 0,
+            total: release.size,
+        };
+        self.update_cancel = Some(cancel);
+        cx.notify();
+        self.update_task = Some(cx.spawn(async move |this, cx| {
+            while let Some((received, total)) = progress_receiver.next().await {
+                let updated = this.update(cx, |state, cx| {
+                    if let UpdateStatus::Downloading {
+                        received: current,
+                        total: current_total,
+                        ..
+                    } = &mut state.update_status
+                    {
+                        *current = received;
+                        *current_total = total;
+                    }
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    return;
+                }
+            }
+            let result = result_receiver.await.unwrap_or_else(|_| {
+                Err(tr_anyhow!(
+                    "다운로드가 중단되었습니다",
+                    "The download was interrupted"
+                ))
+            });
+            this.update(cx, |state, cx| {
+                state.update_task = None;
+                state.update_cancel = None;
+                state.update_status = match result {
+                    Ok(installer) => UpdateStatus::Ready { release, installer },
+                    Err(error) => {
+                        log::error!("Update download failed: {error:#}");
+                        UpdateStatus::Failed(format!("{error:#}"))
+                    }
+                };
+                cx.notify();
+            })
+            .log_err();
+        }));
+    }
+
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateStatus::Ready { installer, .. } = &self.update_status else {
+            return;
+        };
+        let installer = installer.clone();
+        let work = cx.background_spawn(async move { updates::launch_installer(&installer) });
+        cx.spawn(async move |this, cx| match work.await {
+            Ok(()) => {
+                cx.update(|cx| cx.quit()).log_err();
+            }
+            Err(error) => {
+                this.update(cx, |state, cx| {
+                    state.toast(format!("{error:#}"), ToastKind::Error, cx)
+                })
+                .log_err();
+            }
+        })
+        .detach();
     }
 
     pub fn take_startup_toasts(&mut self) -> Vec<Toast> {
@@ -339,7 +613,10 @@ impl HubState {
                 log::error!("Failed to save {label}: {error:#}");
                 this.update(cx, |state, cx| {
                     state.toast(
-                        format!("{label}을(를) 저장하지 못했습니다"),
+                        trf!(
+                            "{label}을(를) 저장하지 못했습니다",
+                            "Failed to save the {label}"
+                        ),
                         ToastKind::Error,
                         cx,
                     )
@@ -353,7 +630,7 @@ impl HubState {
     fn save_settings(&mut self, cx: &mut Context<Self>) {
         self.settings.version = CURRENT_SCHEMA_VERSION;
         let pending = self.settings_file.prepare(&self.settings);
-        self.spawn_write(pending, "설정", cx);
+        self.spawn_write(pending, tr!("설정", "Settings"), cx);
     }
 
     fn save_projects(&mut self, cx: &mut Context<Self>) {
@@ -362,7 +639,7 @@ impl HubState {
             projects: self.records.clone(),
         };
         let pending = self.projects_file.prepare(&file);
-        self.spawn_write(pending, "프로젝트 목록", cx);
+        self.spawn_write(pending, tr!("프로젝트 목록", "Project list"), cx);
     }
 
     fn save_engines(&mut self, cx: &mut Context<Self>) {
@@ -373,7 +650,7 @@ impl HubState {
             sizes: self.size_records.clone(),
         };
         let pending = self.engines_file.prepare(&file);
-        self.spawn_write(pending, "엔진 목록", cx);
+        self.spawn_write(pending, tr!("엔진 목록", "Engine list"), cx);
     }
 
     pub fn update_settings(&mut self, cx: &mut Context<Self>, update: impl FnOnce(&mut Settings)) {
@@ -383,6 +660,9 @@ impl HubState {
             return;
         }
         self.save_settings(cx);
+        if before.launch_at_startup != self.settings.launch_at_startup {
+            self.apply_launch_at_startup(true, cx);
+        }
         let watch_changed = before.watch_folders != self.settings.watch_folders;
         let import_enabled = !before.import_engine_recent_on_startup
             && self.settings.import_engine_recent_on_startup;
@@ -572,7 +852,10 @@ impl HubState {
     ) {
         if inspections.is_empty() {
             self.toast(
-                "추가할 .uproject 파일을 찾지 못했습니다",
+                tr!(
+                    "추가할 .uproject 파일을 찾지 못했습니다",
+                    "No .uproject files found to add"
+                ),
                 ToastKind::Error,
                 cx,
             );
@@ -580,10 +863,20 @@ impl HubState {
         }
         let (added, reveal_key) = self.insert_inspections(inspections, ProjectOrigin::Manual, cx);
         if added == 0 {
-            self.toast("이미 목록에 있는 프로젝트입니다", ToastKind::Info, cx);
+            self.toast(
+                tr!(
+                    "이미 목록에 있는 프로젝트입니다",
+                    "The project is already in the list"
+                ),
+                ToastKind::Info,
+                cx,
+            );
         } else {
             self.toast(
-                format!("프로젝트 {added}개를 추가했습니다"),
+                trf!(
+                    "프로젝트 {added}개를 추가했습니다",
+                    "Added {added} project(s)"
+                ),
                 ToastKind::Success,
                 cx,
             );
@@ -599,7 +892,14 @@ impl HubState {
             return LaunchOutcome::Unavailable;
         };
         if row.presence != ProjectPresence::Present {
-            self.toast("프로젝트 경로에 접근할 수 없습니다", ToastKind::Error, cx);
+            self.toast(
+                tr!(
+                    "프로젝트 경로에 접근할 수 없습니다",
+                    "The project path is not accessible"
+                ),
+                ToastKind::Error,
+                cx,
+            );
             return LaunchOutcome::Unavailable;
         }
         if let Some(pid) = self.running_pid_for_project(key) {
@@ -608,7 +908,11 @@ impl HubState {
             cx.spawn(async move |this, cx| {
                 if !focus.await {
                     this.update(cx, |state, cx| {
-                        state.toast("이미 실행 중입니다", ToastKind::Info, cx)
+                        state.toast(
+                            tr!("이미 실행 중입니다", "Already running"),
+                            ToastKind::Info,
+                            cx,
+                        )
                     })
                     .log_err();
                 }
@@ -618,7 +922,10 @@ impl HubState {
         }
         let Some(resolution) = row.resolution.as_ref() else {
             self.toast(
-                "프로젝트 정보를 읽는 중입니다. 잠시 후 다시 시도하세요",
+                tr!(
+                    "프로젝트 정보를 읽는 중입니다. 잠시 후 다시 시도하세요",
+                    "Still reading project information. Try again in a moment"
+                ),
                 ToastKind::Info,
                 cx,
             );
@@ -638,7 +945,11 @@ impl HubState {
     pub fn launch_engine(&mut self, engine_key: &str, cx: &mut Context<Self>) {
         match self.engine(engine_key).cloned() {
             Some(engine) if engine.available => self.start_editor(None, engine, cx),
-            _ => self.toast("엔진 경로를 찾을 수 없습니다", ToastKind::Error, cx),
+            _ => self.toast(
+                tr!("엔진 경로를 찾을 수 없습니다", "Engine path not found"),
+                ToastKind::Error,
+                cx,
+            ),
         }
     }
 
@@ -661,7 +972,14 @@ impl HubState {
                 Ok(child) => state.track_child(child, project_key, engine_key, cx),
                 Err(error) => {
                     log::error!("{error:#}");
-                    state.toast(format!("엔진 실행 실패: {error:#}"), ToastKind::Error, cx);
+                    state.toast(
+                        trf!(
+                            "엔진 실행 실패: {error:#}",
+                            "Failed to launch the engine: {error:#}"
+                        ),
+                        ToastKind::Error,
+                        cx,
+                    );
                 }
             })
             .log_err();
@@ -788,13 +1106,22 @@ impl HubState {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let Some(row) = self.row(project_key).cloned() else {
-            return Task::ready(Err(anyhow!("프로젝트를 찾을 수 없습니다")));
+            return Task::ready(Err(tr_anyhow!(
+                "프로젝트를 찾을 수 없습니다",
+                "Project not found"
+            )));
         };
         let Some(engine) = self.engine(engine_key).cloned() else {
-            return Task::ready(Err(anyhow!("엔진을 찾을 수 없습니다")));
+            return Task::ready(Err(tr_anyhow!(
+                "엔진을 찾을 수 없습니다",
+                "Engine not found"
+            )));
         };
         if self.is_project_running(project_key) {
-            return Task::ready(Err(anyhow!("프로젝트가 실행 중이라 변경할 수 없습니다")));
+            return Task::ready(Err(tr_anyhow!(
+                "프로젝트가 실행 중이라 변경할 수 없습니다",
+                "The project is running and cannot be changed"
+            )));
         }
         let association = engine.identifier.clone();
         let project_path = row.path.clone();
@@ -819,8 +1146,9 @@ impl HubState {
                     state.rebuild_rows();
                     state.save_projects(cx);
                     state.toast(
-                        format!(
+                        trf!(
                             "{}의 엔진을 {}(으)로 변경했습니다",
+                            "Changed the engine of {} to {}",
                             row.name,
                             engine.label()
                         ),
@@ -835,7 +1163,14 @@ impl HubState {
                 }
                 Err(error) => {
                     log::error!("{error:#}");
-                    state.toast(format!("엔진 변경 실패: {error:#}"), ToastKind::Error, cx);
+                    state.toast(
+                        trf!(
+                            "엔진 변경 실패: {error:#}",
+                            "Failed to change the engine: {error:#}"
+                        ),
+                        ToastKind::Error,
+                        cx,
+                    );
                     Err(error)
                 }
             })?
@@ -846,7 +1181,10 @@ impl HubState {
         let work = cx.background_spawn(async move {
             let root = clean_path(&root);
             if !engines::is_engine_root(&root) {
-                bail!("엔진 폴더가 아닙니다 (Engine\\Build\\Build.version 없음)");
+                tr_bail!(
+                    "엔진 폴더가 아닙니다 (Engine\\Build\\Build.version 없음)",
+                    "Not an engine folder (Engine\\Build\\Build.version is missing)"
+                );
             }
             Ok(root)
         });
@@ -861,7 +1199,11 @@ impl HubState {
                             .iter()
                             .any(|engine| path_key(&engine.root) == key);
                     if already_known {
-                        state.toast("이미 등록된 엔진입니다", ToastKind::Info, cx);
+                        state.toast(
+                            tr!("이미 등록된 엔진입니다", "The engine is already registered"),
+                            ToastKind::Info,
+                            cx,
+                        );
                         return;
                     }
                     state.manual_engines.push(ManualEngine {
@@ -870,7 +1212,11 @@ impl HubState {
                     });
                     state.save_engines(cx);
                     state.rescan_engines(cx);
-                    state.toast("엔진을 추가했습니다", ToastKind::Success, cx);
+                    state.toast(
+                        tr!("엔진을 추가했습니다", "Engine added"),
+                        ToastKind::Success,
+                        cx,
+                    );
                 }
                 Err(error) => state.toast(format!("{error:#}"), ToastKind::Error, cx),
             })
@@ -886,15 +1232,22 @@ impl HubState {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         let Some(engine) = self.engine(engine_key).cloned() else {
-            return Task::ready(Err(anyhow!("엔진을 찾을 수 없습니다")));
+            return Task::ready(Err(tr_anyhow!(
+                "엔진을 찾을 수 없습니다",
+                "Engine not found"
+            )));
         };
         if engine.source == EngineSource::Launcher {
-            return Task::ready(Err(anyhow!(
-                "Launcher로 설치된 엔진은 Epic Games Launcher에서 제거해야 합니다"
+            return Task::ready(Err(tr_anyhow!(
+                "Launcher로 설치된 엔진은 Epic Games Launcher에서 제거해야 합니다",
+                "Launcher-installed engines must be removed from the Epic Games Launcher"
             )));
         }
         if self.is_engine_running(engine_key) {
-            return Task::ready(Err(anyhow!("엔진이 실행 중이라 제거할 수 없습니다")));
+            return Task::ready(Err(tr_anyhow!(
+                "엔진이 실행 중이라 제거할 수 없습니다",
+                "The engine is running and cannot be removed"
+            )));
         }
         let work_engine = engine.clone();
         let work = cx.background_spawn(async move {
@@ -902,8 +1255,10 @@ impl HubState {
                 platform::unregister_source_build(&work_engine.identifier)?;
             }
             if removal == EngineRemoval::DeleteFolder && work_engine.root.exists() {
-                trash::delete(&work_engine.root)
-                    .context("엔진 폴더를 휴지통으로 이동하지 못했습니다")?;
+                trash::delete(&work_engine.root).context(tr!(
+                    "엔진 폴더를 휴지통으로 이동하지 못했습니다",
+                    "Failed to move the engine folder to the Recycle Bin"
+                ))?;
             }
             Ok::<_, anyhow::Error>(())
         });
@@ -921,14 +1276,16 @@ impl HubState {
                     Ok(()) => {
                         let message = match removal {
                             EngineRemoval::UnregisterOnly => {
-                                format!(
+                                trf!(
                                     "엔진 {}을(를) 목록에서 제거했습니다",
+                                    "Removed engine {} from the list",
                                     engine.version_label()
                                 )
                             }
                             EngineRemoval::DeleteFolder => {
-                                format!(
+                                trf!(
                                     "엔진 {} 폴더를 휴지통으로 이동했습니다",
+                                    "Moved the engine {} folder to the Recycle Bin",
                                     engine.version_label()
                                 )
                             }
@@ -938,7 +1295,14 @@ impl HubState {
                     }
                     Err(error) => {
                         log::error!("{error:#}");
-                        state.toast(format!("엔진 제거 실패: {error:#}"), ToastKind::Error, cx);
+                        state.toast(
+                            trf!(
+                                "엔진 제거 실패: {error:#}",
+                                "Failed to remove the engine: {error:#}"
+                            ),
+                            ToastKind::Error,
+                            cx,
+                        );
                         Err(error)
                     }
                 }
@@ -1031,7 +1395,10 @@ impl HubState {
             Err(error) => {
                 this.update(cx, |state, cx| {
                     state.toast(
-                        format!("Epic Launcher 실행 실패: {error:#}"),
+                        trf!(
+                            "Epic Launcher 실행 실패: {error:#}",
+                            "Failed to start the Epic Launcher: {error:#}"
+                        ),
                         ToastKind::Error,
                         cx,
                     )

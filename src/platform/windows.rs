@@ -1,20 +1,26 @@
 use anyhow::{Context as _, Result, bail};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS, INFINITE, OpenProcess,
-    PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateMutexW, DETACHED_PROCESS, INFINITE,
+    OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SW_RESTORE, SetForegroundWindow, ShowWindow,
+    EnumWindows, GW_OWNER, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
 };
 use windows_sys::core::BOOL;
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE};
 
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const RUN_VALUE: &str = "UnrealHub";
+const SINGLE_INSTANCE_MUTEX: &str = "Local\\UnrealHub-SingleInstance";
 const LAUNCHER_REGISTRY_KEY: &str = r"SOFTWARE\EpicGames\Unreal Engine";
 const SOURCE_BUILDS_KEY: &str = r"Software\Epic Games\Unreal Engine\Builds";
 
@@ -71,23 +77,29 @@ pub fn is_source_build_registered(identifier: &str) -> bool {
 
 pub fn register_source_build(identifier: &str, engine_root: &Path) -> Result<()> {
     let user = RegKey::predef(HKEY_CURRENT_USER);
-    let (builds_key, _) = user
-        .create_subkey(SOURCE_BUILDS_KEY)
-        .context("레지스트리 키를 열 수 없습니다")?;
+    let (builds_key, _) = user.create_subkey(SOURCE_BUILDS_KEY).context(tr!(
+        "레지스트리 키를 열 수 없습니다",
+        "Cannot open the registry key"
+    ))?;
     let value = engine_root.to_string_lossy().replace('\\', "/");
-    builds_key
-        .set_value(identifier, &value)
-        .context("엔진을 레지스트리에 등록하지 못했습니다")
+    builds_key.set_value(identifier, &value).context(tr!(
+        "엔진을 레지스트리에 등록하지 못했습니다",
+        "Failed to register the engine in the registry"
+    ))
 }
 
 pub fn unregister_source_build(identifier: &str) -> Result<()> {
     let user = RegKey::predef(HKEY_CURRENT_USER);
     let builds_key = user
         .open_subkey_with_flags(SOURCE_BUILDS_KEY, KEY_SET_VALUE)
-        .context("레지스트리 키를 열 수 없습니다")?;
-    builds_key
-        .delete_value(identifier)
-        .context("레지스트리에서 엔진 등록을 해제하지 못했습니다")
+        .context(tr!(
+            "레지스트리 키를 열 수 없습니다",
+            "Cannot open the registry key"
+        ))?;
+    builds_key.delete_value(identifier).context(tr!(
+        "레지스트리에서 엔진 등록을 해제하지 못했습니다",
+        "Failed to unregister the engine from the registry"
+    ))
 }
 
 pub fn unreal_engine_local_dir() -> Option<PathBuf> {
@@ -235,6 +247,145 @@ pub fn bring_process_window_to_front(pid: u32) -> bool {
         if IsIconic(search.found) != 0 {
             ShowWindow(search.found, SW_RESTORE);
         }
+        SetForegroundWindow(search.found) != 0
+    }
+}
+
+pub fn set_launch_at_startup(enabled: bool, executable: &Path) -> Result<()> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    let (run_key, _) = user.create_subkey(RUN_KEY).context(tr!(
+        "레지스트리 키를 열 수 없습니다",
+        "Cannot open the registry key"
+    ))?;
+    if enabled {
+        let command = format!(
+            "\"{}\" {}",
+            executable.display(),
+            crate::platform::AUTOSTART_ARGUMENT
+        );
+        run_key.set_value(RUN_VALUE, &command).context(tr!(
+            "Windows 시작 프로그램에 등록하지 못했습니다",
+            "Failed to register Unreal Hub to start with Windows"
+        ))
+    } else {
+        match run_key.delete_value(RUN_VALUE) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context(tr!(
+                "Windows 시작 프로그램 등록을 해제하지 못했습니다",
+                "Failed to stop Unreal Hub from starting with Windows"
+            )),
+        }
+    }
+}
+
+fn window_hwnd(window: &impl HasWindowHandle) -> Option<HWND> {
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
+        _ => None,
+    }
+}
+
+pub fn set_window_visible(window: &impl HasWindowHandle, visible: bool) {
+    let Some(hwnd) = window_hwnd(window) else {
+        log::warn!("Cannot change window visibility: no Win32 handle");
+        return;
+    };
+    unsafe {
+        if visible {
+            let command = if IsIconic(hwnd) != 0 {
+                SW_RESTORE
+            } else {
+                SW_SHOW
+            };
+            ShowWindow(hwnd, command);
+            SetForegroundWindow(hwnd);
+        } else {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
+
+pub struct SingleInstance {
+    handle: HANDLE,
+}
+
+impl Drop for SingleInstance {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
+pub struct AlreadyRunning;
+
+pub fn acquire_single_instance() -> Result<Option<SingleInstance>, AlreadyRunning> {
+    let name: Vec<u16> = SINGLE_INSTANCE_MUTEX
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return Ok(None);
+    }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        unsafe {
+            CloseHandle(handle);
+        }
+        return Err(AlreadyRunning);
+    }
+    Ok(Some(SingleInstance { handle }))
+}
+
+struct TitleSearch {
+    title: Vec<u16>,
+    own_pid: u32,
+    found: HWND,
+}
+
+unsafe extern "system" fn find_window_by_title(window: HWND, state: LPARAM) -> BOOL {
+    let search = unsafe { &mut *(state as *mut TitleSearch) };
+    let mut window_pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, &mut window_pid) };
+    if window_pid == search.own_pid || unsafe { !GetWindow(window, GW_OWNER).is_null() } {
+        return 1;
+    }
+    let mut buffer = [0u16; 256];
+    let length = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+    let text = buffer
+        .get(..usize::try_from(length).unwrap_or(0))
+        .unwrap_or_default();
+    if text == search.title.as_slice() {
+        search.found = window;
+        0
+    } else {
+        1
+    }
+}
+
+pub fn activate_existing_instance(title: &str) -> bool {
+    let mut search = TitleSearch {
+        title: title.encode_utf16().collect(),
+        own_pid: std::process::id(),
+        found: std::ptr::null_mut(),
+    };
+    unsafe {
+        EnumWindows(
+            Some(find_window_by_title),
+            &mut search as *mut TitleSearch as LPARAM,
+        );
+    }
+    if search.found.is_null() {
+        return false;
+    }
+    unsafe {
+        let command = if IsIconic(search.found) != 0 {
+            SW_RESTORE
+        } else {
+            SW_SHOW
+        };
+        ShowWindow(search.found, command);
         SetForegroundWindow(search.found) != 0
     }
 }

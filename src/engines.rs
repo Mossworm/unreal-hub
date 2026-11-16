@@ -20,8 +20,8 @@ impl EngineSource {
     pub fn label(self) -> &'static str {
         match self {
             EngineSource::Launcher => "Launcher",
-            EngineSource::SourceBuild => "소스 빌드",
-            EngineSource::Manual => "수동",
+            EngineSource::SourceBuild => tr!("소스 빌드", "Source build"),
+            EngineSource::Manual => tr!("수동", "Manual"),
         }
     }
 
@@ -48,7 +48,7 @@ impl Engine {
     pub fn version_label(&self) -> String {
         self.version
             .map(|version| version.to_string())
-            .unwrap_or_else(|| "알 수 없음".to_string())
+            .unwrap_or_else(|| tr!("알 수 없음", "Unknown").to_string())
     }
 
     pub fn label(&self) -> String {

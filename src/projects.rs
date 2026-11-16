@@ -496,7 +496,10 @@ pub fn delete_paths(paths: &[PathBuf], mode: DeleteMode) -> Result<()> {
         return Ok(());
     }
     match mode {
-        DeleteMode::Trash => trash::delete_all(&existing).context("휴지통으로 이동하지 못했습니다"),
+        DeleteMode::Trash => trash::delete_all(&existing).context(tr!(
+            "휴지통으로 이동하지 못했습니다",
+            "Failed to move to the Recycle Bin"
+        )),
         DeleteMode::Permanent => {
             for path in existing {
                 if path.is_dir() {
@@ -504,7 +507,13 @@ pub fn delete_paths(paths: &[PathBuf], mode: DeleteMode) -> Result<()> {
                 } else {
                     std::fs::remove_file(path)
                 }
-                .with_context(|| format!("{} 삭제에 실패했습니다", path.display()))?;
+                .with_context(|| {
+                    trf!(
+                        "{} 삭제에 실패했습니다",
+                        "Failed to delete {}",
+                        path.display()
+                    )
+                })?;
             }
             Ok(())
         }
@@ -516,20 +525,33 @@ pub fn write_uproject_association(
     association: &str,
     create_backup: bool,
 ) -> Result<()> {
-    let text = std::fs::read_to_string(project_path)
-        .with_context(|| format!("{}을(를) 읽을 수 없습니다", project_path.display()))?;
+    let text = std::fs::read_to_string(project_path).with_context(|| {
+        trf!(
+            "{}을(를) 읽을 수 없습니다",
+            "Cannot read {}",
+            project_path.display()
+        )
+    })?;
     let updated = crate::unreal::set_engine_association(&text, association)?;
     if create_backup {
         let mut backup = project_path.as_os_str().to_owned();
         backup.push(".bak");
-        std::fs::copy(project_path, PathBuf::from(backup))
-            .context(".uproject 백업을 만들지 못했습니다")?;
+        std::fs::copy(project_path, PathBuf::from(backup)).context(tr!(
+            ".uproject 백업을 만들지 못했습니다",
+            "Failed to back up the .uproject"
+        ))?;
     }
     let mut temporary = project_path.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = PathBuf::from(temporary);
-    std::fs::write(&temporary, updated).context(".uproject를 쓰지 못했습니다")?;
-    std::fs::rename(&temporary, project_path).context(".uproject를 교체하지 못했습니다")
+    std::fs::write(&temporary, updated).context(tr!(
+        ".uproject를 쓰지 못했습니다",
+        "Failed to write the .uproject"
+    ))?;
+    std::fs::rename(&temporary, project_path).context(tr!(
+        ".uproject를 교체하지 못했습니다",
+        "Failed to replace the .uproject"
+    ))
 }
 
 #[cfg(test)]

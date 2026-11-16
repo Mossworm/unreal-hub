@@ -342,6 +342,7 @@ impl RenderOnce for IconButton {
 pub struct Toggle {
     id: ElementId,
     on: bool,
+    disabled: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -350,8 +351,14 @@ impl Toggle {
         Self {
             id: id.into(),
             on,
+            disabled: false,
             on_click: None,
         }
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     pub fn on_click(
@@ -382,9 +389,12 @@ impl RenderOnce for Toggle {
             .rounded_full()
             .bg(track)
             .when(self.on, |this| this.justify_end())
+            .when(self.disabled, |this| this.opacity(0.4))
             .child(div().size(rems(1.0)).rounded_full().bg(gpui::white()))
-            .cursor_pointer()
-            .when_some(self.on_click, |this, handler| this.on_click(handler))
+            .when(!self.disabled, |this| {
+                this.cursor_pointer()
+                    .when_some(self.on_click, |this, handler| this.on_click(handler))
+            })
     }
 }
 
@@ -591,7 +601,7 @@ pub fn running_badge(theme: &Theme) -> impl IntoElement {
         .text_xs()
         .text_color(theme.success)
         .child(div().size(rems(0.45)).rounded_full().bg(theme.success))
-        .child("실행 중")
+        .child(tr!("실행 중", "Running"))
 }
 
 pub fn spinner_text(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
@@ -686,7 +696,7 @@ pub fn dialog_frame(
                 .child(
                     IconButton::new("dialog-close", Icon::Close)
                         .size(0.9)
-                        .tooltip("닫기 (Esc)")
+                        .tooltip(tr!("닫기 (Esc)", "Close (Esc)"))
                         .on_click(on_close),
                 ),
         )

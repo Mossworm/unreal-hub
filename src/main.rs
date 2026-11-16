@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod engines;
 mod paths;
 mod platform;
@@ -8,8 +10,10 @@ mod projects;
 mod state;
 mod storage;
 mod templates;
+mod tray;
 mod ui;
 mod unreal;
+mod updates;
 mod util;
 
 use crate::state::HubState;
@@ -24,6 +28,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{Builder, Rotation};
 use tracing_subscriber::EnvFilter;
 
+pub const WINDOW_TITLE: &str = "Unreal Hub";
 const MINIMUM_WIDTH: f32 = 900.0;
 const MINIMUM_HEIGHT: f32 = 560.0;
 const DEFAULT_WIDTH: f32 = 1040.0;
@@ -101,11 +106,14 @@ fn window_bounds(settings: &Settings, cx: &App) -> WindowBounds {
     })
 }
 
-fn open_main_window(loaded: LoadedState, cx: &mut App) {
+fn open_main_window(loaded: LoadedState, launched_at_startup: bool, cx: &mut App) {
+    let start_hidden = launched_at_startup && loaded.settings.value.starts_hidden_with_windows();
     let options = WindowOptions {
         window_bounds: Some(window_bounds(&loaded.settings.value, cx)),
+        show: !start_hidden,
+        focus: !start_hidden,
         titlebar: Some(TitlebarOptions {
-            title: Some("Unreal Hub".into()),
+            title: Some(WINDOW_TITLE.into()),
             appears_transparent: true,
             traffic_light_position: None,
         }),
@@ -115,10 +123,14 @@ fn open_main_window(loaded: LoadedState, cx: &mut App) {
     };
     let opened = cx.open_window(options, |window, cx| {
         let state = cx.new(|cx| HubState::new(loaded, cx));
-        cx.new(|cx| HubView::new(state, window, cx))
+        cx.new(|cx| HubView::new(state, start_hidden, window, cx))
     });
     match opened {
-        Ok(_) => cx.activate(true),
+        Ok(_) => {
+            if !start_hidden {
+                cx.activate(true);
+            }
+        }
         Err(error) => {
             log::error!("Cannot open the main window: {error:#}");
             cx.quit();
@@ -136,6 +148,18 @@ fn main() {
     };
     let _log_guard = init_logging(&data_dir);
     log::info!("Unreal Hub {} starting", env!("CARGO_PKG_VERSION"));
+
+    let _instance = match platform::acquire_single_instance() {
+        Err(platform::AlreadyRunning) => {
+            if !platform::activate_existing_instance(WINDOW_TITLE) {
+                log::warn!("Another instance is running but its window was not found");
+            }
+            return;
+        }
+        Ok(instance) => instance,
+    };
+    let launched_at_startup =
+        std::env::args().any(|argument| argument == platform::AUTOSTART_ARGUMENT);
 
     let loader_dir = data_dir.clone();
     let loader = std::thread::Builder::new()
@@ -156,12 +180,13 @@ fn main() {
                     storage::load_state(data_dir.clone())
                 }
             };
+            i18n::set_language(i18n::resolve(loaded.settings.value.language));
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
             })
             .detach();
-            open_main_window(loaded, cx);
+            open_main_window(loaded, launched_at_startup, cx);
         });
 }

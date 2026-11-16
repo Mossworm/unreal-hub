@@ -79,10 +79,13 @@ impl ChangeEngineDialog {
             .or(association_version);
         let current_label = match current_engine {
             Some(engine) => engine.label(),
-            None if association.is_empty() => "알 수 없음".to_string(),
+            None if association.is_empty() => tr!("알 수 없음", "Unknown").to_string(),
             None => match classify_association(&association) {
                 AssociationKind::Version { .. } => association.clone(),
-                _ => format!("알 수 없는 빌드 ({association})"),
+                _ => trf!(
+                    "알 수 없는 빌드 ({association})",
+                    "Unknown build ({association})"
+                ),
             },
         };
         let selected = current_engine_key
@@ -174,20 +177,24 @@ impl Render for ChangeEngineDialog {
             (Some(current), Some(selected))
                 if (selected.major, selected.minor) > (current.major, current.minor) =>
             {
-                Some(
+                Some(tr!(
                     "상위 버전으로 바꾸면 에셋이 변환되어 이전 버전에서 열 수 없게 될 수 있습니다.",
-                )
+                    "Switching to a newer version converts assets, which may stop them from opening in older versions."
+                ))
             }
             (Some(current), Some(selected))
                 if (selected.major, selected.minor) < (current.major, current.minor) =>
             {
-                Some("하위 버전으로는 정상적으로 열리지 않을 수 있습니다.")
+                Some(tr!(
+                    "하위 버전으로는 정상적으로 열리지 않을 수 있습니다.",
+                    "The project may not open correctly in an older version."
+                ))
             }
             _ => None,
         };
         let title = match self.mode {
-            ChangeEngineMode::Change => "엔진 버전 변경",
-            ChangeEngineMode::MissingEngine => "엔진을 찾을 수 없음",
+            ChangeEngineMode::Change => tr!("엔진 버전 변경", "Change Engine Version"),
+            ChangeEngineMode::MissingEngine => tr!("엔진을 찾을 수 없음", "Engine Not Found"),
         };
         let intro: AnyElement = match self.mode {
             ChangeEngineMode::Change => div()
@@ -200,23 +207,28 @@ impl Render for ChangeEngineDialog {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(self.project_name.clone()),
                 )
-                .child(
-                    div()
-                        .text_color(theme.text_muted)
-                        .child(format!("현재: {}", self.current_label)),
-                )
+                .child(div().text_color(theme.text_muted).child(trf!(
+                    "현재: {}",
+                    "Current: {}",
+                    self.current_label
+                )))
                 .into_any_element(),
             ChangeEngineMode::MissingEngine => div()
-                .child(format!(
+                .child(trf!(
                     "이 프로젝트({})는 엔진 {}을(를) 사용하지만 설치되어 있지 않습니다.",
-                    self.project_name, self.current_label
+                    "This project ({}) uses engine {}, which is not installed.",
+                    self.project_name,
+                    self.current_label
                 ))
                 .into_any_element(),
         };
         let engine_list: AnyElement = if engines.is_empty() {
             error_note(
                 &theme,
-                "설치된 엔진이 없습니다. 설치 탭에서 엔진을 추가하세요.",
+                tr!(
+                    "설치된 엔진이 없습니다. 설치 탭에서 엔진을 추가하세요.",
+                    "No engines are installed. Add one in the Installs tab."
+                ),
             )
             .into_any_element()
         } else {
@@ -267,12 +279,12 @@ impl Render for ChangeEngineDialog {
         let footer = match self.mode {
             ChangeEngineMode::Change => dialog_footer(&theme)
                 .child(
-                    Button::new("change-cancel", "취소")
+                    Button::new("change-cancel", tr!("취소", "Cancel"))
                         .disabled(busy)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                 )
                 .child(
-                    Button::new("change-apply", "변경")
+                    Button::new("change-apply", tr!("변경", "Change"))
                         .disabled(!can_submit)
                         .on_click(cx.listener(|this, _, _, cx| this.submit(false, cx))),
                 )
@@ -280,9 +292,9 @@ impl Render for ChangeEngineDialog {
                     Button::new(
                         "change-apply-open",
                         if busy {
-                            "변경 중…"
+                            tr!("변경 중…", "Changing…")
                         } else {
-                            "변경 후 열기"
+                            tr!("변경 후 열기", "Change and Open")
                         },
                     )
                     .primary()
@@ -291,24 +303,34 @@ impl Render for ChangeEngineDialog {
                 ),
             ChangeEngineMode::MissingEngine => dialog_footer(&theme)
                 .child(
-                    Button::new("missing-open-launcher", "Epic Launcher 열기")
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.state
-                                .update(cx, |state, cx| state.open_epic_launcher(cx))
-                        })),
+                    Button::new(
+                        "missing-open-launcher",
+                        tr!("Epic Launcher 열기", "Open Epic Launcher"),
+                    )
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.state
+                            .update(cx, |state, cx| state.open_epic_launcher(cx))
+                    })),
                 )
                 .child(div().flex_1())
                 .child(
-                    Button::new("missing-cancel", "취소")
+                    Button::new("missing-cancel", tr!("취소", "Cancel"))
                         .disabled(busy)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                 )
                 .child(
-                    Button::new("missing-open", if busy { "여는 중…" } else { "열기" })
-                        .primary()
-                        .disabled(!can_submit)
-                        .on_click(cx.listener(|this, _, _, cx| this.submit(true, cx))),
+                    Button::new(
+                        "missing-open",
+                        if busy {
+                            tr!("여는 중…", "Opening…")
+                        } else {
+                            tr!("열기", "Open")
+                        },
+                    )
+                    .primary()
+                    .disabled(!can_submit)
+                    .on_click(cx.listener(|this, _, _, cx| this.submit(true, cx))),
                 ),
         };
         dialog_frame(
@@ -321,20 +343,27 @@ impl Render for ChangeEngineDialog {
             dialog_body(&theme)
                 .child(intro)
                 .when(self.mode == ChangeEngineMode::MissingEngine, |this| {
-                    this.child(section_label(&theme, "다른 버전으로 열기"))
+                    this.child(section_label(
+                        &theme,
+                        tr!("다른 버전으로 열기", "Open with another version"),
+                    ))
                 })
                 .child(engine_list)
                 .when_some(version_warning, |this, warning| {
                     this.child(warning_note(&theme, warning))
                 })
                 .child(
-                    Checkbox::new("create-backup", self.create_backup, ".uproject 백업 만들기")
-                        .detail("(.uproject.bak)")
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.create_backup = !this.create_backup;
-                            cx.notify();
-                        })),
+                    Checkbox::new(
+                        "create-backup",
+                        self.create_backup,
+                        tr!(".uproject 백업 만들기", "Back up .uproject"),
+                    )
+                    .detail("(.uproject.bak)")
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.create_backup = !this.create_backup;
+                        cx.notify();
+                    })),
                 ),
         )
         .child(footer)
@@ -520,13 +549,24 @@ impl CacheCleanupDialog {
             state
                 .update(cx, |state, cx| match result {
                     Ok(()) => state.toast(
-                        format!("{project_name} 캐시 {} 정리됨", format_bytes(total)),
+                        trf!(
+                            "{project_name} 캐시 {} 정리됨",
+                            "Cleaned {} from the {project_name} cache",
+                            format_bytes(total)
+                        ),
                         ToastKind::Success,
                         cx,
                     ),
                     Err(error) => {
                         log::error!("{error:#}");
-                        state.toast(format!("캐시 정리 실패: {error:#}"), ToastKind::Error, cx)
+                        state.toast(
+                            trf!(
+                                "캐시 정리 실패: {error:#}",
+                                "Failed to clean the cache: {error:#}"
+                            ),
+                            ToastKind::Error,
+                            cx,
+                        )
                     }
                 })
                 .log_err();
@@ -555,17 +595,23 @@ impl CacheCleanupDialog {
             CacheFolder::Binaries => "Binaries".into(),
         };
         let note = match folder {
-            CacheFolder::Saved => Some("로그·자동저장·세이브게임 포함"),
-            CacheFolder::Binaries => Some("C++ 프로젝트는 재빌드 필요"),
+            CacheFolder::Saved => Some(tr!(
+                "로그·자동저장·세이브게임 포함",
+                "includes logs, autosaves and save games"
+            )),
+            CacheFolder::Binaries => Some(tr!(
+                "C++ 프로젝트는 재빌드 필요",
+                "C++ projects must be rebuilt"
+            )),
             _ => None,
         };
         let size_label: AnyElement = match self.sizes {
-            None => spinner_text(theme, "계산 중…").into_any_element(),
+            None => spinner_text(theme, tr!("계산 중…", "Calculating…")).into_any_element(),
             Some(sizes) => match sizes.displayed(folder, self.options) {
                 Some(bytes) => div().child(format_bytes(bytes)).into_any_element(),
                 None => div()
                     .text_color(theme.text_disabled)
-                    .child("없음")
+                    .child(tr!("없음", "None"))
                     .into_any_element(),
             },
         };
@@ -608,9 +654,16 @@ impl Render for CacheCleanupDialog {
             self.selected.contains(&CacheFolder::Saved) && self.is_available(CacheFolder::Saved);
         let binaries_selected = self.selected.contains(&CacheFolder::Binaries)
             && self.is_available(CacheFolder::Binaries);
-        let clean_button = Button::new("cache-clean", if busy { "정리 중…" } else { "정리" })
-            .disabled(!can_clean)
-            .on_click(cx.listener(|this, _, _, cx| this.clean(cx)));
+        let clean_button = Button::new(
+            "cache-clean",
+            if busy {
+                tr!("정리 중…", "Cleaning…")
+            } else {
+                tr!("정리", "Clean")
+            },
+        )
+        .disabled(!can_clean)
+        .on_click(cx.listener(|this, _, _, cx| this.clean(cx)));
         let clean_button = if permanent {
             clean_button.danger()
         } else {
@@ -618,7 +671,7 @@ impl Render for CacheCleanupDialog {
         };
         dialog_frame(
             &theme,
-            format!("캐시 정리 — {}", self.project_name),
+            trf!("캐시 정리 — {}", "Clean Cache — {}", self.project_name),
             34.0,
             cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close)),
         )
@@ -627,7 +680,10 @@ impl Render for CacheCleanupDialog {
                 .when(running, |this| {
                     this.child(error_note(
                         &theme,
-                        "프로젝트가 실행 중이라 정리할 수 없습니다.",
+                        tr!(
+                            "프로젝트가 실행 중이라 정리할 수 없습니다.",
+                            "The project is running and cannot be cleaned."
+                        ),
                     ))
                 })
                 .child(self.folder_row(CacheFolder::Intermediate, &theme, cx))
@@ -639,7 +695,7 @@ impl Render for CacheCleanupDialog {
                             Checkbox::new(
                                 "keep-saved-config",
                                 self.options.keep_saved_config,
-                                "Saved\\Config 보존",
+                                tr!("Saved\\Config 보존", "Keep Saved\\Config"),
                             )
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -656,7 +712,10 @@ impl Render for CacheCleanupDialog {
                             Checkbox::new(
                                 "include-plugin-folders",
                                 self.options.include_plugin_folders,
-                                "플러그인 Intermediate/Binaries도 포함",
+                                tr!(
+                                    "플러그인 Intermediate/Binaries도 포함",
+                                    "Also include plugin Intermediate/Binaries"
+                                ),
                             )
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -673,11 +732,11 @@ impl Render for CacheCleanupDialog {
                         .flex()
                         .justify_between()
                         .font_weight(FontWeight::MEDIUM)
-                        .child("선택 합계")
+                        .child(tr!("선택 합계", "Selected total"))
                         .child(if self.sizes.is_some() {
                             format_bytes(self.selected_total())
                         } else {
-                            "계산 중…".to_string()
+                            tr!("계산 중…", "Calculating…").to_string()
                         }),
                 )
                 .child(
@@ -685,7 +744,11 @@ impl Render for CacheCleanupDialog {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(div().text_color(theme.text_muted).child("삭제 방식"))
+                        .child(
+                            div()
+                                .text_color(theme.text_muted)
+                                .child(tr!("삭제 방식", "Delete method")),
+                        )
                         .child(
                             Radio::new("delete-trash", !permanent)
                                 .disabled(busy)
@@ -693,7 +756,7 @@ impl Render for CacheCleanupDialog {
                                     this.mode = DeleteMode::Trash;
                                     cx.notify();
                                 }))
-                                .child("휴지통으로"),
+                                .child(tr!("휴지통으로", "Recycle Bin")),
                         )
                         .child(
                             Radio::new("delete-permanent", permanent)
@@ -702,17 +765,23 @@ impl Render for CacheCleanupDialog {
                                     this.mode = DeleteMode::Permanent;
                                     cx.notify();
                                 }))
-                                .child("영구 삭제"),
+                                .child(tr!("영구 삭제", "Delete permanently")),
                         ),
                 )
                 .when(permanent, |this| {
-                    this.child(error_note(&theme, "영구 삭제는 되돌릴 수 없습니다."))
+                    this.child(error_note(
+                        &theme,
+                        tr!(
+                            "영구 삭제는 되돌릴 수 없습니다.",
+                            "Permanent deletion cannot be undone."
+                        ),
+                    ))
                 }),
         )
         .child(
             dialog_footer(&theme)
                 .child(
-                    Button::new("cache-cancel", "취소")
+                    Button::new("cache-cancel", tr!("취소", "Cancel"))
                         .disabled(busy)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                 )
@@ -735,7 +804,8 @@ impl EventEmitter<DialogEvent> for RemoveEngineDialog {}
 impl RemoveEngineDialog {
     pub fn new(state: Entity<HubState>, engine_key: String, cx: &mut Context<Self>) -> Self {
         let engine = state.read(cx).engine(&engine_key).cloned();
-        let confirm_input = cx.new(|cx| TextInput::new("엔진 버전 입력", cx));
+        let confirm_input = cx
+            .new(|cx| TextInput::new(|| tr!("엔진 버전 입력", "Enter engine version").into(), cx));
         let subscriptions =
             vec![cx.subscribe(&confirm_input, |_, _, _: &TextInputEvent, cx| cx.notify())];
         Self {
@@ -811,29 +881,32 @@ impl Render for RemoveEngineDialog {
         let theme = Theme::of(cx);
         let close = cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close));
         let Some(engine) = self.engine.clone() else {
-            return dialog_frame(&theme, "엔진 제거", 30.0, close)
-                .child(dialog_body(&theme).child("엔진을 찾을 수 없습니다."))
+            return dialog_frame(&theme, tr!("엔진 제거", "Remove Engine"), 30.0, close)
+                .child(
+                    dialog_body(&theme).child(tr!("엔진을 찾을 수 없습니다.", "Engine not found.")),
+                )
                 .into_any_element();
         };
-        let title = format!("엔진 제거 — {}", engine.label());
+        let title = trf!("엔진 제거 — {}", "Remove Engine — {}", engine.label());
         if engine.source == EngineSource::Launcher {
             return dialog_frame(&theme, title, 30.0, close)
-                .child(
-                    dialog_body(&theme)
-                        .child("Launcher로 설치된 엔진은 Epic Games Launcher에서 제거해야 합니다."),
-                )
+                .child(dialog_body(&theme).child(tr!(
+                    "Launcher로 설치된 엔진은 Epic Games Launcher에서 제거해야 합니다.",
+                    "Launcher-installed engines must be removed from the Epic Games Launcher."
+                )))
                 .child(
                     dialog_footer(&theme)
                         .child(
-                            Button::new("remove-close", "닫기")
+                            Button::new("remove-close", tr!("닫기", "Close"))
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                         )
                         .child(
-                            Button::new("remove-open-launcher", "Epic Launcher 열기")
-                                .primary()
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.confirm(window, cx)),
-                                ),
+                            Button::new(
+                                "remove-open-launcher",
+                                tr!("Epic Launcher 열기", "Open Epic Launcher"),
+                            )
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
                         ),
                 )
                 .into_any_element();
@@ -845,18 +918,21 @@ impl Render for RemoveEngineDialog {
         let can_remove = self.can_remove(cx);
         let delete_folder = self.removal == EngineRemoval::DeleteFolder;
         let unregister_label = match engine.source {
-            EngineSource::SourceBuild => "목록·레지스트리 등록만 해제",
-            _ => "목록에서만 제거",
+            EngineSource::SourceBuild => tr!(
+                "목록·레지스트리 등록만 해제",
+                "Unregister from the list and registry only"
+            ),
+            _ => tr!("목록에서만 제거", "Remove from the list only"),
         };
         let confirm_input = self.confirm_input.clone();
         let remove_button = Button::new(
             "remove-apply",
             if busy {
-                "제거 중…"
+                tr!("제거 중…", "Removing…")
             } else if delete_folder {
-                "삭제"
+                tr!("삭제", "Delete")
             } else {
-                "제거"
+                tr!("제거", "Remove")
             },
         )
         .disabled(!can_remove)
@@ -870,13 +946,20 @@ impl Render for RemoveEngineDialog {
             .child(
                 dialog_body(&theme)
                     .when(running, |this| {
-                        this.child(error_note(&theme, "엔진이 실행 중이라 제거할 수 없습니다."))
+                        this.child(error_note(
+                            &theme,
+                            tr!(
+                                "엔진이 실행 중이라 제거할 수 없습니다.",
+                                "The engine is running and cannot be removed."
+                            ),
+                        ))
                     })
                     .when(!projects_using.is_empty(), |this| {
                         this.child(warning_note(
                             &theme,
-                            format!(
+                            trf!(
                                 "이 엔진을 사용하는 프로젝트 {}개: {}",
+                                "{} project(s) use this engine: {}",
                                 projects_using.len(),
                                 projects_using.join(", ")
                             ),
@@ -900,7 +983,10 @@ impl Render for RemoveEngineDialog {
                                 window.focus(&focus);
                                 cx.notify();
                             }))
-                            .child("폴더까지 삭제 (휴지통)"),
+                            .child(tr!(
+                                "폴더까지 삭제 (휴지통)",
+                                "Also delete the folder (Recycle Bin)"
+                            )),
                     )
                     .when(delete_folder, |this| {
                         this.child(
@@ -909,8 +995,9 @@ impl Render for RemoveEngineDialog {
                                 .flex_col()
                                 .gap_1p5()
                                 .pl_6()
-                                .child(div().text_color(theme.text_muted).child(format!(
+                                .child(div().text_color(theme.text_muted).child(trf!(
                                     "확인을 위해 엔진 버전 {}을(를) 입력하세요.",
+                                    "Type the engine version {} to confirm.",
                                     engine.version_label()
                                 )))
                                 .child(div().w(rems(14.0)).flex().child(confirm_input)),
@@ -920,7 +1007,7 @@ impl Render for RemoveEngineDialog {
             .child(
                 dialog_footer(&theme)
                     .child(
-                        Button::new("remove-cancel", "취소")
+                        Button::new("remove-cancel", tr!("취소", "Cancel"))
                             .disabled(busy)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                     )

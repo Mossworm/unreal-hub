@@ -1,6 +1,9 @@
-use crate::state::{HubEvent, HubState, Toast, ToastKind};
+use crate::i18n;
+use crate::platform;
+use crate::state::{HubEvent, HubState, LaunchOutcome, Toast, ToastKind, UpdateStatus};
 use crate::storage::{Tab, WindowPlacement};
-use crate::ui::components::{Icon, IconButton, icon};
+use crate::tray::{self, Tray, TrayCommand, TraySignal};
+use crate::ui::components::{Button, Icon, IconButton, icon};
 use crate::ui::dialogs::{
     CacheCleanupDialog, ChangeEngineDialog, ChangeEngineMode, DialogEvent, RemoveEngineDialog,
 };
@@ -11,9 +14,12 @@ use crate::ui::settings_view::SettingsDialog;
 use crate::ui::theme::Theme;
 use crate::ui::{Confirm, Dismiss};
 use crate::util::ResultExt;
+use crate::util::format_bytes;
+use futures::StreamExt as _;
 use gpui::{
-    AnyView, Context, Entity, ExternalPaths, FocusHandle, FontWeight, IntoElement, MouseButton,
-    Render, Subscription, Task, Window, WindowBounds, WindowControlArea, div, prelude::*, px, rems,
+    AnyElement, AnyView, Context, Entity, ExternalPaths, FocusHandle, FontWeight, IntoElement,
+    MouseButton, Render, Subscription, Task, Window, WindowBounds, WindowControlArea, div,
+    prelude::*, px, rems,
 };
 use std::time::Duration;
 
@@ -74,11 +80,18 @@ pub struct HubView {
     toast_tasks: Vec<(usize, Task<()>)>,
     next_toast_id: usize,
     placement_task: Option<Task<()>>,
+    tray: Option<Tray>,
+    _tray_task: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl HubView {
-    pub fn new(state: Entity<HubState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        state: Entity<HubState>,
+        started_hidden: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let projects = cx.new(|cx| ProjectsView::new(state.clone(), window, cx));
         let installs = cx.new(|cx| InstallsView::new(state.clone(), cx));
         let tab = state.read(cx).settings.last_tab;
@@ -91,6 +104,8 @@ impl HubView {
             cx.subscribe_in(&installs, window, Self::handle_installs_event),
             cx.observe_in(&state, window, |this, _, window, cx| {
                 this.apply_theme(window, cx);
+                this.apply_language(window, cx);
+                this.sync_tray(cx);
                 cx.notify();
             }),
             cx.observe_window_appearance(window, |this, window, cx| this.apply_theme(window, cx)),
@@ -98,6 +113,30 @@ impl HubView {
                 this.schedule_placement_save(window, cx)
             }),
         ];
+
+        let mut tray_signals = tray::install_event_handlers();
+        let tray_task = cx.spawn_in(window, async move |this, cx| {
+            while let Some(signal) = tray_signals.next().await {
+                let handled = this.update_in(cx, |view, window, cx| {
+                    view.handle_tray_signal(signal, window, cx)
+                });
+                if handled.is_err() {
+                    break;
+                }
+            }
+        });
+        let close_view = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let hide = close_view
+                .update(cx, |view, cx| {
+                    view.tray.is_some() && view.state.read(cx).settings.close_to_tray
+                })
+                .unwrap_or(false);
+            if hide {
+                platform::set_window_visible(window, false);
+            }
+            !hide
+        });
 
         let mut view = Self {
             state: state.clone(),
@@ -111,8 +150,14 @@ impl HubView {
             toast_tasks: Vec::new(),
             next_toast_id: 0,
             placement_task: None,
+            tray: None,
+            _tray_task: tray_task,
             _subscriptions: subscriptions,
         };
+        view.sync_tray(cx);
+        if started_hidden && view.tray.is_none() {
+            platform::set_window_visible(window, true);
+        }
         view.apply_theme(window, cx);
         let startup_toasts = state.update(cx, |state, _| state.take_startup_toasts());
         for toast in startup_toasts {
@@ -122,6 +167,172 @@ impl HubView {
             state.update(cx, |state, cx| state.ensure_engine_sizes(cx));
         }
         view
+    }
+
+    fn apply_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = i18n::resolve(self.state.read(cx).settings.language);
+        if language == i18n::current() {
+            return;
+        }
+        i18n::set_language(language);
+        if let Some(tray) = &mut self.tray {
+            tray.refresh_labels().log_err();
+        }
+        window.refresh();
+    }
+
+    fn sync_tray(&mut self, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        let wanted = state.settings.shows_tray_icon();
+        let recent = state.recent_projects(tray::RECENT_PROJECT_LIMIT);
+        match (&mut self.tray, wanted) {
+            (Some(existing), true) => {
+                existing.update_recent(recent).log_err();
+            }
+            (Some(_), false) => self.tray = None,
+            (None, true) => match Tray::new(recent) {
+                Ok(created) => self.tray = Some(created),
+                Err(error) => log::error!("Cannot create the tray icon: {error:#}"),
+            },
+            (None, false) => {}
+        }
+    }
+
+    fn show_window(&self, window: &mut Window) {
+        platform::set_window_visible(window, true);
+        window.activate_window();
+    }
+
+    fn handle_tray_signal(
+        &mut self,
+        signal: TraySignal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = self
+            .tray
+            .as_ref()
+            .and_then(|tray| tray.command_for(&signal))
+        else {
+            return;
+        };
+        match command {
+            TrayCommand::ShowWindow => self.show_window(window),
+            TrayCommand::OpenProject(key) => {
+                let outcome = self
+                    .state
+                    .update(cx, |state, cx| state.launch_project(&key, cx));
+                if outcome == LaunchOutcome::EngineMissing {
+                    self.show_window(window);
+                    self.select_tab(Tab::Projects, cx);
+                    self.open_change_engine(key, ChangeEngineMode::MissingEngine, window, cx);
+                }
+            }
+            TrayCommand::Quit => cx.quit(),
+        }
+    }
+
+    fn render_update_banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let status = self.state.read(cx).visible_update()?.clone();
+        let (message, buttons): (String, Vec<AnyElement>) = match status {
+            UpdateStatus::Idle => return None,
+            UpdateStatus::Available(release) => (
+                trf!(
+                    "새 버전 v{}이(가) 있습니다",
+                    "Version v{} is available",
+                    release.version
+                ),
+                vec![
+                    Button::new("update-start", tr!("업데이트", "Update"))
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.update(cx, |state, cx| state.download_update(cx))
+                        }))
+                        .into_any_element(),
+                    Button::new("update-later", tr!("나중에", "Later"))
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.update(cx, |state, cx| state.dismiss_update(cx))
+                        }))
+                        .into_any_element(),
+                ],
+            ),
+            UpdateStatus::Downloading {
+                release,
+                received,
+                total,
+            } => {
+                let progress = match total.filter(|total| *total > 0) {
+                    Some(total) => format!("{}%", received.saturating_mul(100) / total),
+                    None => format_bytes(received),
+                };
+                (
+                    trf!(
+                        "v{} 내려받는 중… {progress}",
+                        "Downloading v{}… {progress}",
+                        release.version
+                    ),
+                    Vec::new(),
+                )
+            }
+            UpdateStatus::Ready { release, .. } => (
+                trf!(
+                    "v{} 업데이트가 준비되었습니다",
+                    "The v{} update is ready",
+                    release.version
+                ),
+                vec![
+                    Button::new(
+                        "update-install",
+                        tr!("재시작하여 업데이트", "Restart to Update"),
+                    )
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.state.update(cx, |state, cx| state.install_update(cx))
+                    }))
+                    .into_any_element(),
+                ],
+            ),
+            UpdateStatus::Failed(error) => (
+                trf!("업데이트 실패: {error}", "Update failed: {error}"),
+                vec![
+                    Button::new("update-retry", tr!("다시 시도", "Retry"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.update(cx, |state, cx| {
+                                state.dismiss_update(cx);
+                                state.check_for_updates(true, cx);
+                            })
+                        }))
+                        .into_any_element(),
+                    Button::new("update-close", tr!("닫기", "Close"))
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state.update(cx, |state, cx| state.dismiss_update(cx))
+                        }))
+                        .into_any_element(),
+                ],
+            ),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_3()
+                .mx_5()
+                .mt_4()
+                .px_4()
+                .py_2()
+                .rounded_md()
+                .bg(theme.highlight)
+                .border_1()
+                .border_color(theme.accent.opacity(0.4))
+                .text_sm()
+                .child(icon(Icon::Refresh, 1.0, theme.accent))
+                .child(div().flex_1().min_w_0().child(message))
+                .children(buttons)
+                .into_any_element(),
+        )
     }
 
     fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -398,7 +609,7 @@ impl HubView {
             .child(
                 div().px_2().child(
                     IconButton::new("open-settings", Icon::Settings)
-                        .tooltip("설정")
+                        .tooltip(tr!("설정", "Settings"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
                         ),
@@ -474,11 +685,16 @@ impl HubView {
             .border_color(theme.border)
             .child(item(
                 "tab-projects",
-                "프로젝트",
+                tr!("프로젝트", "Projects"),
                 Icon::Folder,
                 Tab::Projects,
             ))
-            .child(item("tab-installs", "설치", Icon::Installs, Tab::Installs))
+            .child(item(
+                "tab-installs",
+                tr!("설치", "Installs"),
+                Icon::Installs,
+                Tab::Installs,
+            ))
     }
 
     fn render_toasts(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -536,6 +752,7 @@ impl Render for HubView {
             Tab::Installs => self.installs.clone().into(),
         };
         let drop_highlight = theme.highlight;
+        let update_banner = self.render_update_banner(&theme, cx);
         div()
             .id("hub")
             .key_context("Hub")
@@ -565,7 +782,16 @@ impl Render for HubView {
                     .flex_1()
                     .min_h_0()
                     .child(self.render_sidebar(&theme, cx))
-                    .child(div().flex_1().min_w_0().h_full().child(content)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .children(update_banner)
+                            .child(div().flex_1().min_h_0().child(content)),
+                    ),
             )
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();

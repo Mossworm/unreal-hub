@@ -6,7 +6,6 @@ use std::str::Chars;
 
 const TEMPLATE_DEFS_SECTION: &str = "/Script/GameProjectGeneration.TemplateProjectDefs";
 const TEMPLATE_CATEGORIES_SECTION: &str = "/Script/GameProjectGeneration.TemplateCategories";
-const PREFERRED_LANGUAGE: &str = "ko";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UeValue {
@@ -195,10 +194,10 @@ fn localized_entries(value: &UeValue) -> Vec<LocalizedText> {
         .collect()
 }
 
-pub fn choose_localized(texts: &[LocalizedText]) -> String {
+pub fn choose_localized(texts: &[LocalizedText], language: &str) -> String {
     texts
         .iter()
-        .find(|text| text.language.eq_ignore_ascii_case(PREFERRED_LANGUAGE))
+        .find(|text| text.language.eq_ignore_ascii_case(language))
         .or_else(|| {
             texts
                 .iter()
@@ -377,11 +376,11 @@ impl TemplateDefs {
     }
 
     pub fn display_name(&self) -> String {
-        choose_localized(&self.display_names)
+        choose_localized(&self.display_names, crate::i18n::current().code())
     }
 
     pub fn description(&self) -> String {
-        choose_localized(&self.descriptions)
+        choose_localized(&self.descriptions, crate::i18n::current().code())
     }
 
     pub fn fixed_up(&self, template_name: &str, project_name: &str) -> TemplateDefs {
@@ -504,7 +503,7 @@ impl TemplateCatalog {
     }
 }
 
-pub fn parse_template_categories(text: &str) -> Vec<TemplateCategory> {
+pub fn parse_template_categories(text: &str, language: &str) -> Vec<TemplateCategory> {
     ini_values(text, TEMPLATE_CATEGORIES_SECTION, "Categories")
         .iter()
         .map(|value| parse_ue_value(value))
@@ -514,7 +513,7 @@ pub fn parse_template_categories(text: &str) -> Vec<TemplateCategory> {
                 .field("LocalizedDisplayNames")
                 .map(localized_entries)
                 .unwrap_or_default();
-            let display_name = choose_localized(&display_names);
+            let display_name = choose_localized(&display_names, language);
             Some(TemplateCategory {
                 display_name: if display_name.is_empty() {
                     key.clone()
@@ -650,8 +649,9 @@ pub fn build_catalog(
 pub fn load_catalog(engine_root: &Path) -> Result<TemplateCatalog> {
     let templates_dir = engine_root.join("Templates");
     let entries = std::fs::read_dir(&templates_dir).with_context(|| {
-        format!(
+        trf!(
             "템플릿 폴더를 읽을 수 없습니다: {}",
+            "Cannot read the templates folder: {}",
             templates_dir.display()
         )
     })?;
@@ -666,7 +666,7 @@ pub fn load_catalog(engine_root: &Path) -> Result<TemplateCatalog> {
         .filter_map(|folder| load_template(folder))
         .collect();
     let categories = std::fs::read_to_string(templates_dir.join("TemplateCategories.ini"))
-        .map(|text| parse_template_categories(&text))
+        .map(|text| parse_template_categories(&text, crate::i18n::current().code()))
         .unwrap_or_default();
     Ok(build_catalog(templates, categories))
 }
@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn parses_template_defs() {
         let defs = parse_template_defs(THIRD_PERSON_DEFS);
-        assert_eq!(defs.display_name(), "3인칭");
+        assert_eq!(choose_localized(&defs.display_names, "ko"), "3인칭");
         assert_eq!(defs.categories, vec!["Games"]);
         assert!(!defs.is_blank);
         assert!(defs.allow_project_creation);
@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn parses_categories_with_korean_names() {
-        let categories = parse_template_categories(CATEGORIES);
+        let categories = parse_template_categories(CATEGORIES, "ko");
         assert_eq!(
             categories.first(),
             Some(&TemplateCategory {
@@ -836,7 +836,7 @@ mod tests {
                 template("TP_ThirdPersonBP", false, THIRD_PERSON_DEFS),
                 template("TP_BlankBP", false, BLANK_DEFS),
             ],
-            parse_template_categories(CATEGORIES),
+            parse_template_categories(CATEGORIES, "ko"),
         );
         assert_eq!(catalog.groups.len(), 2);
         let blank = catalog.default_group().unwrap();

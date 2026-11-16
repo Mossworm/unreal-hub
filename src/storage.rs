@@ -1,4 +1,5 @@
 use crate::engines::{Engine, ManualEngine};
+use crate::i18n::LanguagePreference;
 use crate::projects::{ProjectRecord, ProjectSort};
 use anyhow::{Context as _, Result, anyhow};
 use serde::de::DeserializeOwned;
@@ -46,7 +47,12 @@ pub struct WindowPlacement {
 #[serde(default)]
 pub struct Settings {
     pub version: u32,
+    pub launch_at_startup: bool,
+    pub start_minimized: bool,
+    pub close_to_tray: bool,
     pub minimize_after_launch: bool,
+    pub check_updates_on_startup: bool,
+    pub language: LanguagePreference,
     pub new_project_directory: Option<PathBuf>,
     pub open_after_create: bool,
     pub default_engine: Option<String>,
@@ -65,7 +71,12 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             version: CURRENT_SCHEMA_VERSION,
+            launch_at_startup: false,
+            start_minimized: false,
+            close_to_tray: false,
             minimize_after_launch: false,
+            check_updates_on_startup: true,
+            language: LanguagePreference::System,
             new_project_directory: None,
             open_after_create: true,
             default_engine: None,
@@ -87,6 +98,14 @@ impl Settings {
 
     pub fn ui_scale_factor(&self) -> f32 {
         self.ui_scale.clamp(90, 150) as f32 / 100.0
+    }
+
+    pub fn shows_tray_icon(&self) -> bool {
+        self.close_to_tray || self.starts_hidden_with_windows()
+    }
+
+    pub fn starts_hidden_with_windows(&self) -> bool {
+        self.launch_at_startup && self.start_minimized
     }
 
     pub fn new_project_directory_or_default(&self) -> Option<PathBuf> {

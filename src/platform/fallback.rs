@@ -46,11 +46,17 @@ pub fn is_source_build_registered(identifier: &str) -> bool {
 }
 
 pub fn register_source_build(_identifier: &str, _engine_root: &Path) -> Result<()> {
-    bail!("이 플랫폼에서는 엔진 등록을 지원하지 않습니다")
+    tr_bail!(
+        "이 플랫폼에서는 엔진 등록을 지원하지 않습니다",
+        "Engine registration is not supported on this platform"
+    )
 }
 
 pub fn unregister_source_build(_identifier: &str) -> Result<()> {
-    bail!("이 플랫폼에서는 엔진 등록 해제를 지원하지 않습니다")
+    tr_bail!(
+        "이 플랫폼에서는 엔진 등록 해제를 지원하지 않습니다",
+        "Engine unregistration is not supported on this platform"
+    )
 }
 
 pub fn unreal_engine_local_dir() -> Option<PathBuf> {
@@ -98,5 +104,26 @@ pub fn wait_for_process_exit(pid: u32) -> Result<()> {
 }
 
 pub fn bring_process_window_to_front(_pid: u32) -> bool {
+    false
+}
+
+pub fn set_launch_at_startup(_enabled: bool, _executable: &Path) -> Result<()> {
+    bail!(tr!(
+        "이 플랫폼에서는 시작 프로그램 등록을 지원하지 않습니다",
+        "Starting with the system is not supported on this platform"
+    ))
+}
+
+pub fn set_window_visible(_window: &impl raw_window_handle::HasWindowHandle, _visible: bool) {}
+
+pub struct SingleInstance;
+
+pub struct AlreadyRunning;
+
+pub fn acquire_single_instance() -> Result<Option<SingleInstance>, AlreadyRunning> {
+    Ok(None)
+}
+
+pub fn activate_existing_instance(_title: &str) -> bool {
     false
 }

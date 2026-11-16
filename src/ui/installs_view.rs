@@ -52,7 +52,7 @@ impl InstallsView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("엔진 폴더 선택".into()),
+            prompt: Some(tr!("엔진 폴더 선택", "Select engine folder").into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |_, cx| {
@@ -61,7 +61,14 @@ impl InstallsView {
                 Ok(Err(error)) => {
                     state
                         .update(cx, |state, cx| {
-                            state.toast(format!("폴더 선택 실패: {error:#}"), ToastKind::Error, cx)
+                            state.toast(
+                                trf!(
+                                    "폴더 선택 실패: {error:#}",
+                                    "Folder selection failed: {error:#}"
+                                ),
+                                ToastKind::Error,
+                                cx,
+                            )
                         })
                         .log_err();
                     None
@@ -96,7 +103,7 @@ impl InstallsView {
             Some(match state.engine_size(&engine.key) {
                 Some(EngineSizeState::Known(bytes)) => format_bytes(bytes).into_any_element(),
                 Some(EngineSizeState::Calculating) => {
-                    spinner_text(theme, "계산 중…").into_any_element()
+                    spinner_text(theme, tr!("계산 중…", "Calculating…")).into_any_element()
                 }
                 None => div().child("—").into_any_element(),
             })
@@ -171,7 +178,7 @@ impl InstallsView {
                                         .text_xs()
                                         .text_color(theme.warning)
                                         .child(icon(Icon::Warning, 0.8, theme.warning))
-                                        .child("경로 없음"),
+                                        .child(tr!("경로 없음", "Path missing")),
                                 )
                             }),
                     )
@@ -236,50 +243,63 @@ impl InstallsView {
                 cx.notify();
             }))
             .child(
-                menu_item("engine-launch", "에디터 실행", !available, None, theme).when(
-                    available,
-                    |this| {
-                        this.on_click(cx.listener(move |this, _, _, cx| {
-                            this.menu = None;
-                            this.state
-                                .update(cx, |state, cx| state.launch_engine(&launch_key, cx));
-                            cx.notify();
-                        }))
-                    },
-                ),
+                menu_item(
+                    "engine-launch",
+                    tr!("에디터 실행", "Launch Editor"),
+                    !available,
+                    None,
+                    theme,
+                )
+                .when(available, |this| {
+                    this.on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = None;
+                        this.state
+                            .update(cx, |state, cx| state.launch_engine(&launch_key, cx));
+                        cx.notify();
+                    }))
+                }),
             )
             .child(
-                menu_item("engine-reveal", "탐색기에서 열기", !available, None, theme).when(
-                    available,
-                    |this| {
-                        this.on_click(cx.listener(move |this, _, _, cx| {
-                            this.menu = None;
-                            cx.open_with_system(&reveal_root);
-                            cx.notify();
-                        }))
-                    },
-                ),
+                menu_item(
+                    "engine-reveal",
+                    tr!("탐색기에서 열기", "Open in Explorer"),
+                    !available,
+                    None,
+                    theme,
+                )
+                .when(available, |this| {
+                    this.on_click(cx.listener(move |this, _, _, cx| {
+                        this.menu = None;
+                        cx.open_with_system(&reveal_root);
+                        cx.notify();
+                    }))
+                }),
             )
             .child(menu_separator(theme))
             .child(if available {
-                menu_item("engine-remove", "제거…", false, None, theme).on_click(cx.listener(
-                    move |this, _, _, cx| {
+                menu_item("engine-remove", tr!("제거…", "Remove…"), false, None, theme).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.menu = None;
                         cx.emit(InstallsEvent::RemoveEngine(remove_key.clone()));
                         cx.notify();
-                    },
-                ))
-            } else {
-                menu_item("engine-forget", "목록에서 제거", false, None, theme).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.menu = None;
-                        let task = this.state.update(cx, |state, cx| {
-                            state.remove_engine(&remove_key, EngineRemoval::UnregisterOnly, cx)
-                        });
-                        task.detach_and_log_err(cx);
-                        cx.notify();
                     }),
                 )
+            } else {
+                menu_item(
+                    "engine-forget",
+                    tr!("목록에서 제거", "Remove from list"),
+                    false,
+                    None,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.menu = None;
+                    let task = this.state.update(cx, |state, cx| {
+                        state.remove_engine(&remove_key, EngineRemoval::UnregisterOnly, cx)
+                    });
+                    task.detach_and_log_err(cx);
+                    cx.notify();
+                }))
             });
         Some(
             deferred(
@@ -309,31 +329,34 @@ impl InstallsView {
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(if refreshing {
-                        "엔진을 찾는 중…"
+                        tr!("엔진을 찾는 중…", "Looking for engines…")
                     } else {
-                        "감지된 엔진이 없습니다"
+                        tr!("감지된 엔진이 없습니다", "No engines detected")
                     }),
             )
-            .child(div().text_sm().text_color(theme.text_muted).child(
+            .child(div().text_sm().text_color(theme.text_muted).child(tr!(
                 "Epic Games Launcher로 엔진을 설치하거나, 이미 있는 엔진 폴더를 추가하세요.",
-            ))
+                "Install an engine with the Epic Games Launcher, or add an existing engine folder."
+            )))
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .mt_3()
                     .child(
-                        Button::new("empty-add-engine", "위치 추가")
+                        Button::new("empty-add-engine", tr!("위치 추가", "Add Location"))
                             .leading_icon(Icon::Plus)
                             .on_click(cx.listener(|this, _, _, cx| this.pick_engine_location(cx))),
                     )
                     .child(
-                        Button::new("empty-open-launcher", "Epic Launcher 열기").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.state
-                                    .update(cx, |state, cx| state.open_epic_launcher(cx))
-                            }),
-                        ),
+                        Button::new(
+                            "empty-open-launcher",
+                            tr!("Epic Launcher 열기", "Open Epic Launcher"),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.open_epic_launcher(cx))
+                        })),
                     ),
             )
             .into_any_element()
@@ -358,22 +381,22 @@ impl Render for InstallsView {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("설치"),
+                    .child(tr!("설치", "Installs")),
             )
             .child(div().flex_1())
             .when(refreshing, |this| {
-                this.child(spinner_text(&theme, "검색 중…"))
+                this.child(spinner_text(&theme, tr!("검색 중…", "Searching…")))
             })
             .child(
                 IconButton::new("rescan-engines", Icon::Refresh)
-                    .tooltip("다시 검색")
+                    .tooltip(tr!("다시 검색", "Rescan"))
                     .disabled(refreshing)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.state.update(cx, |state, cx| state.rescan_engines(cx))
                     })),
             )
             .child(
-                Button::new("add-engine-location", "위치 추가")
+                Button::new("add-engine-location", tr!("위치 추가", "Add Location"))
                     .leading_icon(Icon::Plus)
                     .on_click(cx.listener(|this, _, _, cx| this.pick_engine_location(cx))),
             );

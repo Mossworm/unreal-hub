@@ -1,3 +1,4 @@
+use crate::i18n::LanguagePreference;
 use crate::paths::display_path;
 use crate::platform;
 use crate::state::{HubState, ToastKind};
@@ -5,12 +6,40 @@ use crate::storage::{Settings, ThemePreference, app_data_dir};
 use crate::ui::components::{Button, Icon, IconButton, Radio, Toggle, dialog_frame, section_label};
 use crate::ui::dialogs::DialogEvent;
 use crate::ui::theme::Theme;
+use crate::updates;
 use crate::util::ResultExt;
 use gpui::{
     AnyElement, Context, Entity, EventEmitter, FontWeight, IntoElement, PathPromptOptions, Render,
     SharedString, Subscription, Task, Window, div, prelude::*, rems,
 };
 use std::path::PathBuf;
+
+const OPEN_SOURCE_LICENSES: [(&str, &str); 24] = [
+    ("anyhow", "MIT OR Apache-2.0"),
+    ("dirs", "MIT OR Apache-2.0"),
+    ("futures", "MIT OR Apache-2.0"),
+    ("gpui", "Apache-2.0"),
+    ("jwalk", "MIT"),
+    ("log", "MIT OR Apache-2.0"),
+    ("notify", "CC0-1.0"),
+    ("nucleo-matcher", "MPL-2.0"),
+    ("raw-window-handle", "MIT OR Apache-2.0 OR Zlib"),
+    ("serde", "MIT OR Apache-2.0"),
+    ("serde_json", "MIT OR Apache-2.0"),
+    ("sha2", "MIT OR Apache-2.0"),
+    ("sys-locale", "MIT OR Apache-2.0"),
+    ("sysinfo", "MIT"),
+    ("tracing", "MIT"),
+    ("tracing-appender", "MIT"),
+    ("tracing-subscriber", "MIT"),
+    ("trash", "MIT"),
+    ("tray-icon", "MIT OR Apache-2.0"),
+    ("unicode-segmentation", "MIT OR Apache-2.0"),
+    ("ureq", "MIT OR Apache-2.0"),
+    ("uuid", "Apache-2.0 OR MIT"),
+    ("windows-sys", "MIT OR Apache-2.0"),
+    ("winreg", "MIT"),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Category {
@@ -32,11 +61,11 @@ impl Category {
 
     fn label(self) -> &'static str {
         match self {
-            Category::General => "일반",
-            Category::Projects => "프로젝트",
-            Category::Appearance => "외관",
-            Category::Integration => "연동",
-            Category::About => "정보",
+            Category::General => tr!("일반", "General"),
+            Category::Projects => tr!("프로젝트", "Projects"),
+            Category::Appearance => tr!("외관", "Appearance"),
+            Category::Integration => tr!("연동", "Integration"),
+            Category::About => tr!("정보", "About"),
         }
     }
 }
@@ -94,7 +123,7 @@ impl SettingsDialog {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("폴더 선택".into()),
+            prompt: Some(tr!("폴더 선택", "Select folder").into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |_, cx| {
@@ -103,7 +132,14 @@ impl SettingsDialog {
                 Ok(Err(error)) => {
                     state
                         .update(cx, |state, cx| {
-                            state.toast(format!("폴더 선택 실패: {error:#}"), ToastKind::Error, cx)
+                            state.toast(
+                                trf!(
+                                    "폴더 선택 실패: {error:#}",
+                                    "Folder selection failed: {error:#}"
+                                ),
+                                ToastKind::Error,
+                                cx,
+                            )
                         })
                         .log_err();
                     None
@@ -136,7 +172,7 @@ impl SettingsDialog {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("EpicGamesLauncher.exe 선택".into()),
+            prompt: Some(tr!("EpicGamesLauncher.exe 선택", "Select EpicGamesLauncher.exe").into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |_, cx| {
@@ -196,7 +232,58 @@ impl SettingsDialog {
             .flex_col()
             .child(Self::setting_row(
                 theme,
-                "에디터 실행 후 Hub 최소화",
+                tr!(
+                    "Windows 시작 시 Unreal Hub 실행",
+                    "Start Unreal Hub with Windows"
+                ),
+                None,
+                Toggle::new("launch-at-startup", settings.launch_at_startup).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.update_settings(cx, |settings| {
+                            settings.launch_at_startup = !settings.launch_at_startup
+                        })
+                    },
+                )),
+            ))
+            .child(Self::setting_row(
+                theme,
+                tr!(
+                    "시작 시 최소화 상태로 실행 (트레이)",
+                    "Start minimized to the tray"
+                ),
+                Some(tr!(
+                    "Windows 시작 시 실행될 때만 적용됩니다.",
+                    "Applies only when started with Windows."
+                )),
+                Toggle::new("start-minimized", settings.start_minimized)
+                    .disabled(!settings.launch_at_startup)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update_settings(cx, |settings| {
+                            settings.start_minimized = !settings.start_minimized
+                        })
+                    })),
+            ))
+            .child(Self::setting_row(
+                theme,
+                tr!(
+                    "창을 닫으면 트레이로 최소화",
+                    "Minimize to the tray when the window is closed"
+                ),
+                None,
+                Toggle::new("close-to-tray", settings.close_to_tray).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.update_settings(cx, |settings| {
+                            settings.close_to_tray = !settings.close_to_tray
+                        })
+                    },
+                )),
+            ))
+            .child(Self::setting_row(
+                theme,
+                tr!(
+                    "에디터 실행 후 Hub 최소화",
+                    "Minimize Hub after launching the editor"
+                ),
                 None,
                 Toggle::new("minimize-after-launch", settings.minimize_after_launch).on_click(
                     cx.listener(|this, _, _, cx| {
@@ -227,14 +314,14 @@ impl SettingsDialog {
         let new_project_directory = settings
             .new_project_directory_or_default()
             .map(|path| display_path(&path))
-            .unwrap_or_else(|| "설정되지 않음".to_string());
+            .unwrap_or_else(|| tr!("설정되지 않음", "Not set").to_string());
         div()
             .flex()
             .flex_col()
             .gap_2()
             .child(Self::setting_row(
                 theme,
-                "새 프로젝트 기본 위치",
+                tr!("새 프로젝트 기본 위치", "Default new project location"),
                 None,
                 div()
                     .flex()
@@ -248,13 +335,18 @@ impl SettingsDialog {
                             .text_color(theme.text_muted)
                             .child(new_project_directory),
                     )
-                    .child(Button::new("pick-new-project-directory", "변경").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.pick_folder(FolderTarget::NewProjectDirectory, cx)
-                        }),
-                    )),
+                    .child(
+                        Button::new("pick-new-project-directory", tr!("변경", "Change")).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.pick_folder(FolderTarget::NewProjectDirectory, cx)
+                            }),
+                        ),
+                    ),
             ))
-            .child(section_label(theme, "기본 엔진 버전"))
+            .child(section_label(
+                theme,
+                tr!("기본 엔진 버전", "Default engine version"),
+            ))
             .child(
                 div()
                     .flex()
@@ -265,7 +357,7 @@ impl SettingsDialog {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.update_settings(cx, |settings| settings.default_engine = None)
                             }))
-                            .child("가장 높은 버전 (자동)"),
+                            .child(tr!("가장 높은 버전 (자동)", "Highest version (automatic)")),
                     )
                     .children(
                         engines
@@ -285,13 +377,15 @@ impl SettingsDialog {
                             }),
                     ),
             )
-            .child(div().mt_2().child(section_label(theme, "감시 폴더")))
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child("하위 3단계까지 .uproject를 찾고, 새로 생기면 자동으로 추가합니다."),
+                    .mt_2()
+                    .child(section_label(theme, tr!("감시 폴더", "Watch folders"))),
             )
+            .child(div().text_xs().text_color(theme.text_muted).child(tr!(
+                "하위 3단계까지 .uproject를 찾고, 새로 생기면 자동으로 추가합니다.",
+                "Searches up to 3 levels deep for .uproject files and adds new ones automatically."
+            )))
             .child(
                 div()
                     .flex()
@@ -306,7 +400,7 @@ impl SettingsDialog {
                                 .py_2()
                                 .text_xs()
                                 .text_color(theme.text_muted)
-                                .child("감시 폴더 없음"),
+                                .child(tr!("감시 폴더 없음", "No watch folders")),
                         )
                     })
                     .children(
@@ -340,7 +434,7 @@ impl SettingsDialog {
                                             Icon::Close,
                                         )
                                         .size(0.8)
-                                        .tooltip("제거")
+                                        .tooltip(tr!("제거", "Remove"))
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
                                                 let folder = folder_to_remove.clone();
@@ -357,7 +451,7 @@ impl SettingsDialog {
             )
             .child(
                 div().flex().child(
-                    Button::new("add-watch-folder", "폴더 추가")
+                    Button::new("add-watch-folder", tr!("폴더 추가", "Add Folder"))
                         .leading_icon(Icon::Plus)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.pick_folder(FolderTarget::WatchFolder, cx)
@@ -366,8 +460,14 @@ impl SettingsDialog {
             )
             .child(Self::setting_row(
                 theme,
-                "시작 시 엔진 최근 프로젝트 가져오기",
-                Some("설치된 엔진의 EditorSettings.ini에서 최근 프로젝트를 읽습니다."),
+                tr!(
+                    "시작 시 엔진 최근 프로젝트 가져오기",
+                    "Import engine recent projects on startup"
+                ),
+                Some(tr!(
+                    "설치된 엔진의 EditorSettings.ini에서 최근 프로젝트를 읽습니다.",
+                    "Reads recent projects from each installed engine's EditorSettings.ini."
+                )),
                 Toggle::new(
                     "import-engine-recent",
                     settings.import_engine_recent_on_startup,
@@ -395,28 +495,69 @@ impl SettingsDialog {
                 }))
                 .child(label)
         };
+        let language_option =
+            |id: &'static str, label: &'static str, preference: LanguagePreference| {
+                Radio::new(id, settings.language == preference)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(cx, |settings| settings.language = preference)
+                    }))
+                    .child(label)
+            };
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(section_label(theme, "테마"))
+            .child(section_label(theme, tr!("언어", "Language")))
             .child(
                 div()
                     .flex()
                     .gap_2()
-                    .child(theme_option("theme-dark", "다크", ThemePreference::Dark))
+                    .child(language_option(
+                        "language-system",
+                        tr!("시스템", "System"),
+                        LanguagePreference::System,
+                    ))
+                    .child(language_option(
+                        "language-korean",
+                        "한국어",
+                        LanguagePreference::Korean,
+                    ))
+                    .child(language_option(
+                        "language-english",
+                        "English",
+                        LanguagePreference::English,
+                    )),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .child(section_label(theme, tr!("테마", "Theme"))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(theme_option(
+                        "theme-dark",
+                        tr!("다크", "Dark"),
+                        ThemePreference::Dark,
+                    ))
                     .child(theme_option(
                         "theme-light",
-                        "라이트",
+                        tr!("라이트", "Light"),
                         ThemePreference::Light,
                     ))
                     .child(theme_option(
                         "theme-system",
-                        "시스템",
+                        tr!("시스템", "System"),
                         ThemePreference::System,
                     )),
             )
-            .child(div().mt_2().child(section_label(theme, "UI 크기")))
+            .child(
+                div()
+                    .mt_2()
+                    .child(section_label(theme, tr!("UI 크기", "UI scale"))),
+            )
             .child(
                 div()
                     .flex()
@@ -456,15 +597,26 @@ impl SettingsDialog {
         let configured = settings.epic_launcher_path.clone();
         let current = match (&configured, &self.detected_launcher) {
             (Some(path), _) => display_path(path),
-            (None, Some(detected)) => format!("자동 감지됨: {}", display_path(detected)),
-            (None, None) if self.detect_task.is_some() => "감지 중…".to_string(),
-            (None, None) => "찾지 못함 (com.epicgames.launcher:// 링크로 실행)".to_string(),
+            (None, Some(detected)) => trf!(
+                "자동 감지됨: {}",
+                "Detected automatically: {}",
+                display_path(detected)
+            ),
+            (None, None) if self.detect_task.is_some() => tr!("감지 중…", "Detecting…").to_string(),
+            (None, None) => tr!(
+                "찾지 못함 (com.epicgames.launcher:// 링크로 실행)",
+                "Not found (launches via com.epicgames.launcher://)"
+            )
+            .to_string(),
         };
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(section_label(theme, "Epic Games Launcher 경로"))
+            .child(section_label(
+                theme,
+                tr!("Epic Games Launcher 경로", "Epic Games Launcher path"),
+            ))
             .child(
                 div()
                     .px_3()
@@ -482,24 +634,30 @@ impl SettingsDialog {
                     .flex()
                     .gap_2()
                     .child(
-                        Button::new("pick-launcher", "찾아보기")
+                        Button::new("pick-launcher", tr!("찾아보기", "Browse"))
                             .on_click(cx.listener(|this, _, _, cx| this.pick_launcher(cx))),
                     )
                     .child(
-                        Button::new("detect-launcher", "자동 감지").on_click(cx.listener(
-                            |this, _, _, cx| {
+                        Button::new("detect-launcher", tr!("자동 감지", "Detect")).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.update_settings(cx, |settings| {
                                     settings.epic_launcher_path = None
                                 });
                                 this.detect_launcher(cx);
-                            },
-                        )),
+                            }),
+                        ),
                     ),
             )
             .into_any_element()
     }
 
-    fn render_about(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn render_about(
+        &self,
+        settings: &Settings,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let checking = self.state.read(cx).is_checking_for_updates();
         div()
             .flex()
             .flex_col()
@@ -510,22 +668,90 @@ impl SettingsDialog {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Unreal Hub"),
             )
+            .child(div().text_sm().text_color(theme.text_muted).child(trf!(
+                "버전 {} · 빌드 {}",
+                "Version {} · Built {}",
+                env!("CARGO_PKG_VERSION"),
+                env!("UNREAL_HUB_BUILD_DATE")
+            )))
             .child(
                 div()
-                    .text_sm()
-                    .text_color(theme.text_muted)
-                    .child(format!("버전 {}", env!("CARGO_PKG_VERSION"))),
+                    .flex()
+                    .gap_2()
+                    .mt_2()
+                    .child(
+                        Button::new(
+                            "check-updates",
+                            if checking {
+                                tr!("확인 중…", "Checking…")
+                            } else {
+                                tr!("업데이트 확인", "Check for Updates")
+                            },
+                        )
+                        .disabled(checking)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.check_for_updates(true, cx))
+                        })),
+                    )
+                    .child(
+                        Button::new("open-repository", tr!("GitHub 저장소", "GitHub Repository"))
+                            .on_click(|_, _, cx| cx.open_url(&updates::repository_url())),
+                    )
+                    .child(
+                        Button::new("open-log-folder", tr!("로그 폴더 열기", "Open Log Folder"))
+                            .on_click(cx.listener(|this, _, _, cx| match app_data_dir() {
+                                Ok(directory) => cx.open_with_system(&directory.join("logs")),
+                                Err(error) => this.state.update(cx, |state, cx| {
+                                    state.toast(format!("{error:#}"), ToastKind::Error, cx)
+                                }),
+                            })),
+                    ),
             )
-            .child(div().flex().mt_2().child(
-                Button::new("open-log-folder", "로그 폴더 열기").on_click(cx.listener(
-                    |this, _, _, cx| match app_data_dir() {
-                        Ok(directory) => cx.open_with_system(&directory.join("logs")),
-                        Err(error) => this.state.update(cx, |state, cx| {
-                            state.toast(format!("{error:#}"), ToastKind::Error, cx)
-                        }),
-                    },
-                )),
+            .child(Self::setting_row(
+                theme,
+                tr!(
+                    "시작 시 자동으로 업데이트 확인",
+                    "Check for updates on startup"
+                ),
+                None,
+                Toggle::new("check-updates-on-startup", settings.check_updates_on_startup)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.update_settings(cx, |settings| {
+                            settings.check_updates_on_startup = !settings.check_updates_on_startup
+                        })
+                    })),
             ))
+            .child(div().mt_2().child(section_label(
+                theme,
+                tr!("오픈소스 라이선스", "Open-source licenses"),
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(theme.border)
+                    .children(OPEN_SOURCE_LICENSES.iter().enumerate().map(
+                        |(index, (name, license))| {
+                            div()
+                                .flex()
+                                .justify_between()
+                                .gap_2()
+                                .px_3()
+                                .py_1()
+                                .text_xs()
+                                .when(index > 0, |this| this.border_t_1().border_color(theme.border))
+                                .child(div().child(*name))
+                                .child(div().text_color(theme.text_muted).child(*license))
+                        },
+                    )),
+            )
+            .child(div().text_xs().text_color(theme.text_muted).child(tr!(
+                "직접 사용하는 크레이트 목록입니다. 전이 의존성의 라이선스는 각 크레이트를 따릅니다.",
+                "Crates used directly. Transitive dependencies follow their own licenses."
+            )))
             .into_any_element()
     }
 }
@@ -539,11 +765,11 @@ impl Render for SettingsDialog {
             Category::Projects => self.render_projects(&settings, &theme, cx),
             Category::Appearance => self.render_appearance(&settings, &theme, cx),
             Category::Integration => self.render_integration(&settings, &theme, cx),
-            Category::About => self.render_about(&theme, cx),
+            Category::About => self.render_about(&settings, &theme, cx),
         };
         dialog_frame(
             &theme,
-            "설정",
+            tr!("설정", "Settings"),
             44.0,
             cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close)),
         )
@@ -566,7 +792,7 @@ impl Render for SettingsDialog {
                         .children(Category::ALL.into_iter().map(|category| {
                             let selected = self.category == category;
                             div()
-                                .id(category.label())
+                                .id(("settings-category", category as usize))
                                 .px_3()
                                 .py_1p5()
                                 .rounded_md()

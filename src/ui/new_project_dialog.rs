@@ -15,7 +15,7 @@ use crate::ui::dialogs::DialogEvent;
 use crate::ui::text_input::{TextInput, TextInputEvent};
 use crate::ui::theme::Theme;
 use crate::util::ResultExt;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures::StreamExt as _;
 use futures::channel::{mpsc, oneshot};
 use gpui::{
@@ -79,7 +79,7 @@ impl NewProjectDialog {
         let location = hub.settings.new_project_directory_or_default();
         let open_after = hub.settings.open_after_create;
         let name_input = cx.new(|cx| {
-            let mut input = TextInput::new(DEFAULT_PROJECT_NAME, cx);
+            let mut input = TextInput::new(|| DEFAULT_PROJECT_NAME.into(), cx);
             input.set_text(DEFAULT_PROJECT_NAME, cx);
             input
         });
@@ -228,7 +228,7 @@ impl NewProjectDialog {
             let location = location.clone();
             async move {
                 match (location, engine_root) {
-                    (None, _) => Some("위치를 선택하세요.".to_string()),
+                    (None, _) => Some(tr!("위치를 선택하세요.", "Choose a location.").to_string()),
                     (Some(location), Some(engine_root)) => {
                         validate_location(&location, &name, &engine_root).err()
                     }
@@ -304,7 +304,7 @@ impl NewProjectDialog {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("프로젝트 위치 선택".into()),
+            prompt: Some(tr!("프로젝트 위치 선택", "Select project location").into()),
         });
         cx.spawn(async move |this, cx| {
             let folder = match receiver.await {
@@ -353,18 +353,27 @@ impl NewProjectDialog {
     }
 
     fn build_request(&self, cx: &Context<Self>) -> Result<CreationRequest> {
-        let engine = self.engine().ok_or_else(|| anyhow!("엔진을 선택하세요"))?;
-        let group = self.group().ok_or_else(|| anyhow!("템플릿을 선택하세요"))?;
+        let engine = self
+            .engine()
+            .ok_or_else(|| tr_anyhow!("엔진을 선택하세요", "Select an engine"))?;
+        let group = self
+            .group()
+            .ok_or_else(|| tr_anyhow!("템플릿을 선택하세요", "Select a template"))?;
         let template = if self.use_cpp {
             group.cpp.clone()
         } else {
             group.blueprint.clone()
         }
-        .ok_or_else(|| anyhow!("선택한 프로젝트 유형을 지원하지 않는 템플릿입니다"))?;
+        .ok_or_else(|| {
+            tr_anyhow!(
+                "선택한 프로젝트 유형을 지원하지 않는 템플릿입니다",
+                "This template does not support the selected project type"
+            )
+        })?;
         let location = self
             .location
             .clone()
-            .ok_or_else(|| anyhow!("위치를 선택하세요"))?;
+            .ok_or_else(|| tr_anyhow!("위치를 선택하세요", "Choose a location"))?;
         Ok(CreationRequest {
             engine_root: engine.root.clone(),
             engine_identifier: engine.identifier.clone(),
@@ -408,7 +417,10 @@ impl NewProjectDialog {
                 }
             });
         if let Err(error) = spawned {
-            self.error = Some(format!("작업 스레드를 시작하지 못했습니다: {error}"));
+            self.error = Some(trf!(
+                "작업 스레드를 시작하지 못했습니다: {error}",
+                "Failed to start the worker thread: {error}"
+            ));
             cx.notify();
             return;
         }
@@ -424,9 +436,12 @@ impl NewProjectDialog {
                     return;
                 }
             }
-            let result = result_receiver
-                .await
-                .unwrap_or_else(|_| Err(anyhow!("프로젝트 생성 작업이 중단되었습니다")));
+            let result = result_receiver.await.unwrap_or_else(|_| {
+                Err(tr_anyhow!(
+                    "프로젝트 생성 작업이 중단되었습니다",
+                    "Project creation was interrupted"
+                ))
+            });
             this.update(cx, |dialog, cx| dialog.finish(result, cx))
                 .log_err();
         });
@@ -455,13 +470,13 @@ impl NewProjectDialog {
                     });
                     match &created.project_files_error {
                         None => state.toast(
-                            format!("프로젝트 '{name}'을(를) 만들었습니다"),
+                            trf!("프로젝트 '{name}'을(를) 만들었습니다", "Created project '{name}'"),
                             ToastKind::Success,
                             cx,
                         ),
                         Some(error) => state.toast(
-                            format!(
-                                "프로젝트를 만들었지만 프로젝트 파일 생성에 실패했습니다: {error}"
+                            trf!(
+                                "프로젝트를 만들었지만 프로젝트 파일 생성에 실패했습니다: {error}", "The project was created, but generating project files failed: {error}"
                             ),
                             ToastKind::Error,
                             cx,
@@ -473,7 +488,11 @@ impl NewProjectDialog {
             }
             Err(error) if error.is::<Cancelled>() => {
                 self.state.update(cx, |state, cx| {
-                    state.toast("프로젝트 생성을 취소했습니다", ToastKind::Info, cx)
+                    state.toast(
+                        tr!("프로젝트 생성을 취소했습니다", "Project creation cancelled"),
+                        ToastKind::Info,
+                        cx,
+                    )
                 });
                 cx.emit(DialogEvent::Close);
             }
@@ -489,21 +508,27 @@ impl NewProjectDialog {
     fn render_no_engine(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         dialog_frame(
             theme,
-            "새 프로젝트",
+            tr!("새 프로젝트", "New Project"),
             30.0,
             cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close)),
         )
-        .child(dialog_body(theme).child("설치된 엔진이 없습니다. 설치 탭에서 엔진을 추가하세요."))
+        .child(dialog_body(theme).child(tr!(
+            "설치된 엔진이 없습니다. 설치 탭에서 엔진을 추가하세요.",
+            "No engines are installed. Add one in the Installs tab."
+        )))
         .child(
             dialog_footer(theme)
                 .child(
-                    Button::new("no-engine-close", "닫기")
+                    Button::new("no-engine-close", tr!("닫기", "Close"))
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::Close))),
                 )
                 .child(
-                    Button::new("no-engine-installs", "설치 탭으로 이동")
-                        .primary()
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::ShowInstalls))),
+                    Button::new(
+                        "no-engine-installs",
+                        tr!("설치 탭으로 이동", "Go to Installs"),
+                    )
+                    .primary()
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(DialogEvent::ShowInstalls))),
                 ),
         )
         .into_any_element()
@@ -518,12 +543,16 @@ impl NewProjectDialog {
         let label = self
             .engine()
             .map(|engine| engine.label())
-            .unwrap_or_else(|| "엔진 선택".to_string());
+            .unwrap_or_else(|| tr!("엔진 선택", "Select engine").to_string());
         div()
             .flex()
             .items_center()
             .gap_3()
-            .child(div().text_color(theme.text_muted).child("엔진 버전"))
+            .child(
+                div()
+                    .text_color(theme.text_muted)
+                    .child(tr!("엔진 버전", "Engine version")),
+            )
             .child(
                 div()
                     .relative()
@@ -638,7 +667,10 @@ impl NewProjectDialog {
         let Some(catalog) = self.catalog.as_ref() else {
             return div()
                 .p_4()
-                .child(spinner_text(theme, "템플릿을 읽는 중…"))
+                .child(spinner_text(
+                    theme,
+                    tr!("템플릿을 읽는 중…", "Reading templates…"),
+                ))
                 .into_any_element();
         };
         if catalog.groups.is_empty() {
@@ -646,7 +678,10 @@ impl NewProjectDialog {
                 .p_4()
                 .child(error_note(
                     theme,
-                    "이 엔진에서 사용할 수 있는 템플릿이 없습니다.",
+                    tr!(
+                        "이 엔진에서 사용할 수 있는 템플릿이 없습니다.",
+                        "No templates are available for this engine."
+                    ),
                 ))
                 .into_any_element();
         }
@@ -759,8 +794,12 @@ impl NewProjectDialog {
             .location
             .as_ref()
             .map(|path| display_path(path))
-            .unwrap_or_else(|| "위치를 선택하세요".into());
-        let hidden_reason: SharedString = "이 템플릿에서는 설정할 수 없습니다".into();
+            .unwrap_or_else(|| tr!("위치를 선택하세요", "Choose a location").into());
+        let hidden_reason: SharedString = tr!(
+            "이 템플릿에서는 설정할 수 없습니다",
+            "Not available for this template"
+        )
+        .into();
         let hardware_disabled = busy || hides_hardware;
         let graphics_disabled = busy || hides_graphics;
         let show_toolchain_warning = self.use_cpp && self.has_cpp_toolchain == Some(false);
@@ -785,13 +824,13 @@ impl NewProjectDialog {
             )
             .child(Self::option_row(
                 theme,
-                "프로젝트 유형",
+                tr!("프로젝트 유형", "Project type"),
                 div()
                     .flex()
                     .child(
                         Self::segment(
                             "type-blueprint",
-                            "블루프린트",
+                            tr!("블루프린트", "Blueprint"),
                             !self.use_cpp,
                             busy || group.blueprint.is_none(),
                             theme,
@@ -814,7 +853,10 @@ impl NewProjectDialog {
                         )
                         .rounded_r_md()
                         .when(group.cpp.is_none(), |this| {
-                            this.tooltip(tooltip("이 템플릿은 C++ 버전이 없습니다"))
+                            this.tooltip(tooltip(tr!(
+                                "이 템플릿은 C++ 버전이 없습니다",
+                                "This template has no C++ version"
+                            )))
                         })
                         .when(!busy && group.cpp.is_some(), |this| {
                             this.on_click(cx.listener(|this, _, _, cx| {
@@ -826,7 +868,7 @@ impl NewProjectDialog {
             ))
             .child(Self::option_row(
                 theme,
-                "타깃 플랫폼",
+                tr!("타깃 플랫폼", "Target platform"),
                 div()
                     .id("hardware-options")
                     .flex()
@@ -836,7 +878,7 @@ impl NewProjectDialog {
                     .child(
                         Self::segment(
                             "hardware-desktop",
-                            "데스크톱",
+                            tr!("데스크톱", "Desktop"),
                             self.hardware == HardwareClass::Desktop,
                             hardware_disabled,
                             theme,
@@ -852,7 +894,7 @@ impl NewProjectDialog {
                     .child(
                         Self::segment(
                             "hardware-mobile",
-                            "모바일",
+                            tr!("모바일", "Mobile"),
                             self.hardware == HardwareClass::Mobile,
                             hardware_disabled,
                             theme,
@@ -868,7 +910,7 @@ impl NewProjectDialog {
             ))
             .child(Self::option_row(
                 theme,
-                "품질 프리셋",
+                tr!("품질 프리셋", "Quality preset"),
                 div()
                     .id("graphics-options")
                     .flex()
@@ -878,7 +920,7 @@ impl NewProjectDialog {
                     .child(
                         Self::segment(
                             "graphics-maximum",
-                            "최대",
+                            tr!("최대", "Maximum"),
                             self.graphics == GraphicsPreset::Maximum,
                             graphics_disabled,
                             theme,
@@ -894,7 +936,7 @@ impl NewProjectDialog {
                     .child(
                         Self::segment(
                             "graphics-scalable",
-                            "확장 가능",
+                            tr!("확장 가능", "Scalable"),
                             self.graphics == GraphicsPreset::Scalable,
                             graphics_disabled,
                             theme,
@@ -911,7 +953,10 @@ impl NewProjectDialog {
             .when(show_toolchain_warning, |this| {
                 this.child(warning_note(
                     theme,
-                    "C++ 프로젝트를 빌드하려면 Visual Studio가 필요합니다.",
+                    tr!(
+                        "C++ 프로젝트를 빌드하려면 Visual Studio가 필요합니다.",
+                        "Visual Studio is required to build C++ projects."
+                    ),
                 ))
             })
             .child(div().h_px().my_1().bg(theme.border))
@@ -924,7 +969,7 @@ impl NewProjectDialog {
                         div()
                             .text_sm()
                             .text_color(theme.text_muted)
-                            .child("프로젝트 이름"),
+                            .child(tr!("프로젝트 이름", "Project name")),
                     )
                     .child(div().flex().child(self.name_input.clone()))
                     .when_some(name_error, |this, error| {
@@ -936,7 +981,12 @@ impl NewProjectDialog {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(div().text_sm().text_color(theme.text_muted).child("위치"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.text_muted)
+                            .child(tr!("위치", "Location")),
+                    )
                     .child(
                         div()
                             .flex()
@@ -958,7 +1008,7 @@ impl NewProjectDialog {
                             )
                             .child(
                                 IconButton::new("pick-project-location", Icon::FolderOpen)
-                                    .tooltip("폴더 선택")
+                                    .tooltip(tr!("폴더 선택", "Select folder"))
                                     .disabled(busy)
                                     .on_click(cx.listener(|this, _, _, cx| this.pick_location(cx))),
                             ),
@@ -972,7 +1022,11 @@ impl NewProjectDialog {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_sm().child("생성 후 바로 열기"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(tr!("생성 후 바로 열기", "Open after creation")),
+                    )
                     .child(Toggle::new("open-after-create", self.open_after).on_click(
                         cx.listener(|this, _, _, cx| {
                             this.open_after = !this.open_after;
@@ -999,7 +1053,14 @@ impl Render for NewProjectDialog {
         let can_create = self.can_create(cx);
         let status: Option<AnyElement> = match &self.creation {
             Some(creation) if creation.cancelling => Some(
-                spinner_text(&theme, "취소하는 중… (만들던 폴더를 정리합니다)").into_any_element(),
+                spinner_text(
+                    &theme,
+                    tr!(
+                        "취소하는 중… (만들던 폴더를 정리합니다)",
+                        "Cancelling… (cleaning up the partial folder)"
+                    ),
+                )
+                .into_any_element(),
             ),
             Some(creation) => Some(
                 spinner_text(
@@ -1007,7 +1068,7 @@ impl Render for NewProjectDialog {
                     creation
                         .stage
                         .map(CreationStage::label)
-                        .unwrap_or("준비 중…"),
+                        .unwrap_or(tr!("준비 중…", "Preparing…")),
                 )
                 .into_any_element(),
             ),
@@ -1021,7 +1082,7 @@ impl Render for NewProjectDialog {
         };
         dialog_frame(
             &theme,
-            "새 프로젝트",
+            tr!("새 프로젝트", "New Project"),
             60.0,
             cx.listener(|this, _, _, cx| this.close(cx)),
         )
@@ -1066,12 +1127,16 @@ impl Render for NewProjectDialog {
                 .child(
                     Button::new(
                         "new-project-cancel",
-                        if busy { "생성 취소" } else { "취소" },
+                        if busy {
+                            tr!("생성 취소", "Cancel Creation")
+                        } else {
+                            tr!("취소", "Cancel")
+                        },
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
                 )
                 .child(
-                    Button::new("new-project-create", "프로젝트 생성")
+                    Button::new("new-project-create", tr!("프로젝트 생성", "Create Project"))
                         .primary()
                         .disabled(!can_create)
                         .on_click(cx.listener(|this, _, _, cx| this.create(cx))),

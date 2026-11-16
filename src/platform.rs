@@ -8,10 +8,12 @@ pub use fallback::*;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+pub const AUTOSTART_ARGUMENT: &str = "--autostart";
 
 pub fn editor_executable(engine_root: &Path) -> Option<PathBuf> {
     editor_binary_candidates(engine_root)
@@ -21,8 +23,9 @@ pub fn editor_executable(engine_root: &Path) -> Option<PathBuf> {
 
 pub fn spawn_editor(engine_root: &Path, project: Option<&Path>) -> Result<Child> {
     let executable = editor_executable(engine_root).ok_or_else(|| {
-        anyhow!(
+        tr_anyhow!(
             "에디터 실행 파일을 찾을 수 없습니다: {}",
+            "Editor executable not found: {}",
             engine_root.display()
         )
     })?;
@@ -38,9 +41,13 @@ pub fn spawn_editor(engine_root: &Path, project: Option<&Path>) -> Result<Child>
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     configure_detached(&mut command);
-    command
-        .spawn()
-        .with_context(|| format!("{} 실행에 실패했습니다", executable.display()))
+    command.spawn().with_context(|| {
+        trf!(
+            "{} 실행에 실패했습니다",
+            "Failed to start {}",
+            executable.display()
+        )
+    })
 }
 
 pub fn spawn_program(executable: &Path) -> Result<()> {
@@ -50,10 +57,13 @@ pub fn spawn_program(executable: &Path) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     configure_detached(&mut command);
-    command
-        .spawn()
-        .map(|_child| ())
-        .with_context(|| format!("{} 실행에 실패했습니다", executable.display()))
+    command.spawn().map(|_child| ()).with_context(|| {
+        trf!(
+            "{} 실행에 실패했습니다",
+            "Failed to start {}",
+            executable.display()
+        )
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

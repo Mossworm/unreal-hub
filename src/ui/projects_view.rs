@@ -57,7 +57,12 @@ impl EventEmitter<ProjectsEvent> for ProjectsView {}
 
 impl ProjectsView {
     pub fn new(state: Entity<HubState>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new("이름 또는 경로 검색", cx));
+        let search = cx.new(|cx| {
+            TextInput::new(
+                || tr!("이름 또는 경로 검색", "Search by name or path").into(),
+                cx,
+            )
+        });
         let subscriptions = vec![
             cx.observe(&state, |this, _, cx| this.recompute(cx)),
             cx.subscribe(
@@ -154,7 +159,7 @@ impl ProjectsView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("프로젝트 추가".into()),
+            prompt: Some(tr!("프로젝트 추가", "Add Project").into()),
         });
         let state = self.state.clone();
         cx.spawn(async move |_, cx| {
@@ -163,7 +168,14 @@ impl ProjectsView {
                 Ok(Err(error)) => {
                     state
                         .update(cx, |state, cx| {
-                            state.toast(format!("파일 선택 실패: {error:#}"), ToastKind::Error, cx)
+                            state.toast(
+                                trf!(
+                                    "파일 선택 실패: {error:#}",
+                                    "File selection failed: {error:#}"
+                                ),
+                                ToastKind::Error,
+                                cx,
+                            )
                         })
                         .log_err();
                     None
@@ -206,22 +218,36 @@ impl ProjectsView {
                     },
                     Some(EngineResolution::Embedded(key)) => match state.engine(key) {
                         Some(engine) => (
-                            format!("{} (내장)", engine.version_label()).into(),
-                            Some(format!("엔진 트리 내부 프로젝트 · {}", engine.label()).into()),
+                            trf!("{} (내장)", "{} (built-in)", engine.version_label()).into(),
+                            Some(
+                                trf!(
+                                    "엔진 트리 내부 프로젝트 · {}",
+                                    "Project inside the engine tree · {}",
+                                    engine.label()
+                                )
+                                .into(),
+                            ),
                             false,
                         ),
-                        None => ("(내장)".into(), None, false),
+                        None => (tr!("(내장)", "(built-in)").into(), None, false),
                     },
                     Some(EngineResolution::NotInstalled(version)) => (
                         version.clone().into(),
-                        Some(format!("엔진 {version}이(가) 설치되어 있지 않습니다").into()),
+                        Some(
+                            trf!(
+                                "엔진 {version}이(가) 설치되어 있지 않습니다",
+                                "Engine {version} is not installed"
+                            )
+                            .into(),
+                        ),
                         true,
                     ),
                     Some(EngineResolution::UnknownBuild) => (
-                        "알 수 없는 빌드".into(),
+                        tr!("알 수 없는 빌드", "Unknown build").into(),
                         Some(
-                            format!(
+                            trf!(
                                 "엔진 빌드 '{}'을(를) 찾을 수 없습니다",
+                                "Engine build '{}' not found",
                                 row.association.clone().unwrap_or_default()
                             )
                             .into(),
@@ -305,9 +331,9 @@ impl ProjectsView {
                     .w(rems(ICON_COLUMN_WIDTH))
                     .h_full()
                     .tooltip(tooltip(if row.favorite {
-                        "즐겨찾기 해제"
+                        tr!("즐겨찾기 해제", "Remove from favorites")
                     } else {
-                        "즐겨찾기"
+                        tr!("즐겨찾기", "Add to favorites")
                     }))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -349,7 +375,10 @@ impl ProjectsView {
                             })
                             .when(running, |this| this.child(running_badge(theme)))
                             .when(unreachable, |this| {
-                                this.child(badge("드라이브 연결 안 됨", theme.warning))
+                                this.child(badge(
+                                    tr!("드라이브 연결 안 됨", "Drive not connected"),
+                                    theme.warning,
+                                ))
                             }),
                     )
                     .child(
@@ -401,7 +430,7 @@ impl ProjectsView {
                             .when(!menu_open, |this| this.invisible())
                             .group_hover("project-row", |style| style.visible())
                             .hover(|style| style.bg(theme.active))
-                            .tooltip(tooltip("더 보기"))
+                            .tooltip(tooltip(tr!("더 보기", "More")))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -430,8 +459,13 @@ impl ProjectsView {
         let row = state.row(&menu.key)?.clone();
         let running = state.is_project_running(&row.key);
         let unavailable = row.presence != ProjectPresence::Present;
-        let running_reason: Option<SharedString> =
-            Some("프로젝트가 실행 중일 때는 사용할 수 없습니다".into());
+        let running_reason: Option<SharedString> = Some(
+            tr!(
+                "프로젝트가 실행 중일 때는 사용할 수 없습니다",
+                "Unavailable while the project is running"
+            )
+            .into(),
+        );
         let reveal_path = row.path.clone();
         let change_key = row.key.clone();
         let clean_key = row.key.clone();
@@ -451,7 +485,7 @@ impl ProjectsView {
                             .child(
                                 menu_item(
                                     "menu-reveal",
-                                    "탐색기에서 보기",
+                                    tr!("탐색기에서 보기", "Show in Explorer"),
                                     unavailable,
                                     None,
                                     theme,
@@ -467,7 +501,7 @@ impl ProjectsView {
                             .child(
                                 menu_item(
                                     "menu-change-engine",
-                                    "엔진 버전 변경…",
+                                    tr!("엔진 버전 변경…", "Change Engine Version…"),
                                     running || unavailable,
                                     running_reason.clone().filter(|_| running),
                                     theme,
@@ -488,7 +522,7 @@ impl ProjectsView {
                             .child(
                                 menu_item(
                                     "menu-clean-cache",
-                                    "캐시 정리…",
+                                    tr!("캐시 정리…", "Clean Cache…"),
                                     running || unavailable,
                                     running_reason.filter(|_| running),
                                     theme,
@@ -526,7 +560,7 @@ impl ProjectsView {
                     .text_xl()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text)
-                    .child("프로젝트"),
+                    .child(tr!("프로젝트", "Projects")),
             )
             .child(div().flex_1())
             .child(
@@ -541,7 +575,7 @@ impl ProjectsView {
                         this.child(
                             IconButton::new("clear-search", Icon::Close)
                                 .size(0.8)
-                                .tooltip("검색 지우기")
+                                .tooltip(tr!("검색 지우기", "Clear search"))
                                 .on_click(cx.listener(|this, _, _, cx| this.clear_search(cx))),
                         )
                     }),
@@ -550,7 +584,7 @@ impl ProjectsView {
                 div()
                     .relative()
                     .child(
-                        Button::new("add-project", "추가")
+                        Button::new("add-project", tr!("추가", "Add"))
                             .trailing_icon(Icon::ChevronDown)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.row_menu = None;
@@ -572,7 +606,10 @@ impl ProjectsView {
                                         .child(
                                             menu_item(
                                                 "menu-add-from-disk",
-                                                "디스크에서 프로젝트 추가",
+                                                tr!(
+                                                    "디스크에서 프로젝트 추가",
+                                                    "Add project from disk"
+                                                ),
                                                 false,
                                                 None,
                                                 theme,
@@ -636,7 +673,7 @@ impl ProjectsView {
             )
             .child(div().flex().flex_1().h_full().child(header_cell(
                 "sort-name",
-                "이름",
+                tr!("이름", "Name"),
                 SortColumn::Name,
             )))
             .child(
@@ -647,7 +684,7 @@ impl ProjectsView {
                     .w(rems(ENGINE_COLUMN_WIDTH))
                     .child(header_cell(
                         "sort-engine",
-                        "엔진 버전",
+                        tr!("엔진 버전", "Engine version"),
                         SortColumn::EngineVersion,
                     )),
             )
@@ -664,12 +701,13 @@ impl ProjectsView {
                 .justify_center()
                 .gap_3()
                 .text_color(theme.text_muted)
-                .child(format!(
+                .child(trf!(
                     "'{}'와(과) 일치하는 프로젝트가 없습니다",
+                    "No projects match '{}'",
                     self.query
                 ))
                 .child(
-                    Button::new("empty-clear-search", "검색 지우기")
+                    Button::new("empty-clear-search", tr!("검색 지우기", "Clear search"))
                         .on_click(cx.listener(|this, _, _, cx| this.clear_search(cx))),
                 )
                 .into_any_element();
@@ -690,24 +728,22 @@ impl ProjectsView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text)
                     .child(if refreshing {
-                        "프로젝트를 찾는 중…"
+                        tr!("프로젝트를 찾는 중…", "Looking for projects…")
                     } else {
-                        "프로젝트 없음"
+                        tr!("프로젝트 없음", "No Projects")
                     }),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.text_muted)
-                    .child("시작하려면 새 프로젝트를 생성하거나 프로젝트를 추가하세요."),
-            )
+            .child(div().text_sm().text_color(theme.text_muted).child(tr!(
+                "시작하려면 새 프로젝트를 생성하거나 프로젝트를 추가하세요.",
+                "Create a new project or add an existing one to get started."
+            )))
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .mt_3()
                     .child(
-                        Button::new("empty-add-project", "프로젝트 추가")
+                        Button::new("empty-add-project", tr!("프로젝트 추가", "Add Project"))
                             .on_click(cx.listener(|this, _, _, cx| this.pick_project_files(cx))),
                     )
                     .child(self.new_project_button("empty-new-project", cx)),
@@ -716,7 +752,7 @@ impl ProjectsView {
     }
 
     fn new_project_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
-        Button::new(id, "새 프로젝트")
+        Button::new(id, tr!("새 프로젝트", "New Project"))
             .primary()
             .leading_icon(Icon::Plus)
             .on_click(cx.listener(|this, _, _, cx| {

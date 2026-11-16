@@ -64,7 +64,7 @@ pub enum TextInputEvent {
 pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
-    placeholder: SharedString,
+    placeholder: Box<dyn Fn() -> SharedString>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -76,11 +76,11 @@ pub struct TextInput {
 impl EventEmitter<TextInputEvent> for TextInput {}
 
 impl TextInput {
-    pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+    pub fn new(placeholder: impl Fn() -> SharedString + 'static, cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
-            placeholder: placeholder.into(),
+            placeholder: Box::new(placeholder),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -484,7 +484,7 @@ impl Element for TextElement {
         let cursor = input.cursor_offset();
         let style = window.text_style();
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), theme.text_disabled)
+            ((input.placeholder)(), theme.text_disabled)
         } else {
             (content, style.color)
         };

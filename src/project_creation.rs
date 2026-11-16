@@ -1,7 +1,7 @@
 use crate::platform;
 use crate::templates::{Replacement, Template, TemplateDefs, TemplateSetting};
 use crate::unreal::EngineVersion;
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -67,11 +67,17 @@ pub enum CreationStage {
 impl CreationStage {
     pub fn label(self) -> &'static str {
         match self {
-            CreationStage::CopyingTemplate => "템플릿 복사 중…",
-            CreationStage::WritingConfig => "프로젝트 설정 기록 중…",
-            CreationStage::CopyingSharedContent => "공유 콘텐츠 복사 중…",
-            CreationStage::WritingProjectFile => ".uproject 생성 중…",
-            CreationStage::GeneratingProjectFiles => "프로젝트 파일 생성 중…",
+            CreationStage::CopyingTemplate => tr!("템플릿 복사 중…", "Copying template…"),
+            CreationStage::WritingConfig => {
+                tr!("프로젝트 설정 기록 중…", "Writing project settings…")
+            }
+            CreationStage::CopyingSharedContent => {
+                tr!("공유 콘텐츠 복사 중…", "Copying shared content…")
+            }
+            CreationStage::WritingProjectFile => tr!(".uproject 생성 중…", "Creating .uproject…"),
+            CreationStage::GeneratingProjectFiles => {
+                tr!("프로젝트 파일 생성 중…", "Generating project files…")
+            }
         }
     }
 }
@@ -87,7 +93,10 @@ pub struct Cancelled;
 
 impl fmt::Display for Cancelled {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("프로젝트 생성이 취소되었습니다")
+        formatter.write_str(tr!(
+            "프로젝트 생성이 취소되었습니다",
+            "Project creation was cancelled"
+        ))
     }
 }
 
@@ -95,22 +104,28 @@ impl std::error::Error for Cancelled {}
 
 pub fn validate_project_name(name: &str) -> Result<(), String> {
     let Some(first) = name.chars().next() else {
-        return Err("프로젝트 이름을 입력하세요.".into());
+        return Err(tr!("프로젝트 이름을 입력하세요.", "Enter a project name.").into());
     };
     if !first.is_ascii_alphabetic() {
-        return Err("프로젝트 이름은 영문자로 시작해야 합니다.".into());
+        return Err(tr!(
+            "프로젝트 이름은 영문자로 시작해야 합니다.",
+            "Project names must start with a letter."
+        )
+        .into());
     }
     if let Some(invalid) = name
         .chars()
         .find(|character| !(character.is_ascii_alphanumeric() || *character == '_'))
     {
-        return Err(format!(
-            "프로젝트 이름에는 영문, 숫자, _만 쓸 수 있습니다. ('{invalid}' 사용 불가)"
+        return Err(trf!(
+            "프로젝트 이름에는 영문, 숫자, _만 쓸 수 있습니다. ('{invalid}' 사용 불가)",
+            "Project names may only contain letters, digits and _. ('{invalid}' is not allowed)"
         ));
     }
     if name.chars().count() > MAX_PROJECT_NAME_LENGTH {
-        return Err(format!(
-            "프로젝트 이름은 {MAX_PROJECT_NAME_LENGTH}자 이하여야 합니다."
+        return Err(trf!(
+            "프로젝트 이름은 {MAX_PROJECT_NAME_LENGTH}자 이하여야 합니다.",
+            "Project names must be {MAX_PROJECT_NAME_LENGTH} characters or fewer."
         ));
     }
     Ok(())
@@ -118,19 +133,24 @@ pub fn validate_project_name(name: &str) -> Result<(), String> {
 
 pub fn validate_location(location: &Path, name: &str, engine_root: &Path) -> Result<(), String> {
     if location.as_os_str().is_empty() {
-        return Err("위치를 선택하세요.".into());
+        return Err(tr!("위치를 선택하세요.", "Choose a location.").into());
     }
     if !location.is_dir() {
-        return Err("존재하지 않는 폴더입니다.".into());
+        return Err(tr!("존재하지 않는 폴더입니다.", "The folder does not exist.").into());
     }
     let destination = location.join(name);
     if destination.exists() {
-        return Err(format!("'{}' 폴더가 이미 있습니다.", destination.display()));
+        return Err(trf!(
+            "'{}' 폴더가 이미 있습니다.",
+            "The folder '{}' already exists.",
+            destination.display()
+        ));
     }
     let project_path_length = destination.join(name).to_string_lossy().chars().count();
     if project_path_length > MAX_PROJECT_PATH_LENGTH {
-        return Err(format!(
-            "프로젝트 경로가 너무 깁니다. ({MAX_PROJECT_PATH_LENGTH}자 이하)"
+        return Err(trf!(
+            "프로젝트 경로가 너무 깁니다. ({MAX_PROJECT_PATH_LENGTH}자 이하)",
+            "The project path is too long. ({MAX_PROJECT_PATH_LENGTH} characters or fewer)"
         ));
     }
     let normalized_location = crate::paths::path_key(location);
@@ -138,7 +158,11 @@ pub fn validate_location(location: &Path, name: &str, engine_root: &Path) -> Res
     if normalized_location == engine_folder
         || normalized_location.starts_with(&format!("{engine_folder}\\"))
     {
-        return Err("엔진 폴더 안에는 프로젝트를 만들 수 없습니다.".into());
+        return Err(tr!(
+            "엔진 폴더 안에는 프로젝트를 만들 수 없습니다.",
+            "Projects cannot be created inside the engine folder."
+        )
+        .into());
     }
     Ok(())
 }
@@ -166,8 +190,13 @@ pub fn create_project(
     )
     .map_err(|message| anyhow!(message))?;
     let destination = request.location.join(&request.project_name);
-    std::fs::create_dir_all(destination.join("Content"))
-        .with_context(|| format!("{} 폴더를 만들 수 없습니다", destination.display()))?;
+    std::fs::create_dir_all(destination.join("Content")).with_context(|| {
+        trf!(
+            "{} 폴더를 만들 수 없습니다",
+            "Cannot create folder {}",
+            destination.display()
+        )
+    })?;
     let result = populate_project(request, &destination, cancel, report);
     if result.is_err()
         && let Err(cleanup_error) = std::fs::remove_dir_all(&destination)
@@ -262,8 +291,13 @@ fn relative_files(root: &Path) -> Result<Vec<String>> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let entries = std::fs::read_dir(&directory)
-            .with_context(|| format!("{}을(를) 읽을 수 없습니다", directory.display()))?;
+        let entries = std::fs::read_dir(&directory).with_context(|| {
+            trf!(
+                "{}을(를) 읽을 수 없습니다",
+                "Cannot read {}",
+                directory.display()
+            )
+        })?;
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
@@ -359,12 +393,18 @@ fn copy_template_files(
         let source_file = source.join(&relative);
         let destination_file = destination.join(&destination_relative);
         if let Some(parent) = destination_file.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("{} 폴더를 만들 수 없습니다", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                trf!(
+                    "{} 폴더를 만들 수 없습니다",
+                    "Cannot create folder {}",
+                    parent.display()
+                )
+            })?;
         }
         std::fs::copy(&source_file, &destination_file).with_context(|| {
-            format!(
+            trf!(
                 "\"{}\"을(를) \"{}\"(으)로 복사하지 못했습니다",
+                "Failed to copy \"{}\" to \"{}\"",
                 source_file.display(),
                 destination_file.display()
             )
@@ -439,8 +479,13 @@ pub fn apply_replacements(contents: &str, extension: &str, replacements: &[Repla
 }
 
 fn replace_in_file(path: &Path, replacements: &[Replacement]) -> Result<()> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("{}을(를) 읽을 수 없습니다", path.display()))?;
+    let bytes = std::fs::read(path).with_context(|| {
+        trf!(
+            "{}을(를) 읽을 수 없습니다",
+            "Cannot read {}",
+            path.display()
+        )
+    })?;
     let (bom, body) = match bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         Some(body) => (true, body),
         None => (false, bytes.as_slice()),
@@ -462,8 +507,13 @@ fn replace_in_file(path: &Path, replacements: &[Replacement]) -> Result<()> {
         output.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     }
     output.extend_from_slice(replaced.as_bytes());
-    std::fs::write(path, output)
-        .with_context(|| format!("{}을(를) 처리하지 못했습니다", path.display()))
+    std::fs::write(path, output).with_context(|| {
+        trf!(
+            "{}을(를) 처리하지 못했습니다",
+            "Failed to process {}",
+            path.display()
+        )
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -821,8 +871,13 @@ fn apply_config_value_to_file(config_dir: &Path, value: &ConfigValue) -> Result<
         return Ok(());
     };
     let text = text.trim_start_matches('\u{feff}');
-    std::fs::write(&path, apply_config_value(text, value))
-        .with_context(|| format!("{}을(를) 처리하지 못했습니다", path.display()))
+    std::fs::write(&path, apply_config_value(text, value)).with_context(|| {
+        trf!(
+            "{}을(를) 처리하지 못했습니다",
+            "Failed to process {}",
+            path.display()
+        )
+    })
 }
 
 pub fn shared_content_destination(relative: &str, mount_name: &str) -> Option<String> {
@@ -878,7 +933,11 @@ fn expand_additional_files(engine_root: &Path, file_source: &str) -> Result<Vec<
     }
     let base = engine_root.join(directory);
     if !base.is_dir() {
-        bail!("공유 콘텐츠 폴더를 찾을 수 없습니다: {}", base.display());
+        tr_bail!(
+            "공유 콘텐츠 폴더를 찾을 수 없습니다: {}",
+            "Shared content folder not found: {}",
+            base.display()
+        );
     }
     Ok(relative_files(&base)?
         .into_iter()
@@ -906,7 +965,13 @@ fn copy_shared_content(
             .iter()
             .find(|level| level.eq_ignore_ascii_case(required_level))
             .or_else(|| pack.detail_levels.first())
-            .ok_or_else(|| anyhow!("공유 콘텐츠 팩 {}에 상세 수준이 없습니다", pack.mount_name))?;
+            .ok_or_else(|| {
+                tr_anyhow!(
+                    "공유 콘텐츠 팩 {}에 상세 수준이 없습니다",
+                    "Shared content pack {} has no detail level",
+                    pack.mount_name
+                )
+            })?;
         let manifest_path = request
             .engine_root
             .join("Templates")
@@ -916,14 +981,23 @@ fn copy_shared_content(
             .join("FeaturePack")
             .join("manifest.json");
         let manifest_text = std::fs::read_to_string(&manifest_path).with_context(|| {
-            format!(
+            trf!(
                 "공유 콘텐츠 팩 {}{}을(를) 찾을 수 없습니다",
-                pack.mount_name, level
+                "Shared content pack {}{} not found",
+                pack.mount_name,
+                level
             )
         })?;
-        let manifest: serde_json::Value =
-            serde_json::from_str(manifest_text.trim_start_matches('\u{feff}'))
-                .with_context(|| format!("{}을(를) 해석할 수 없습니다", manifest_path.display()))?;
+        let manifest: serde_json::Value = serde_json::from_str(
+            manifest_text.trim_start_matches('\u{feff}'),
+        )
+        .with_context(|| {
+            trf!(
+                "{}을(를) 해석할 수 없습니다",
+                "Cannot parse {}",
+                manifest_path.display()
+            )
+        })?;
         let sources: Vec<String> = manifest
             .get("AdditionalFiles")
             .and_then(|files| files.get("AdditionalFilesList"))
@@ -948,7 +1022,11 @@ fn copy_shared_content(
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::copy(&source_file, &destination_file).with_context(|| {
-                    format!("{}을(를) 복사하지 못했습니다", source_file.display())
+                    trf!(
+                        "{}을(를) 복사하지 못했습니다",
+                        "Failed to copy {}",
+                        source_file.display()
+                    )
                 })?;
             }
         }
@@ -963,10 +1041,15 @@ pub fn build_project_descriptor(
     engine_identifier: &str,
 ) -> Result<String> {
     let value: serde_json::Value =
-        serde_json::from_str(template_text.trim_start_matches('\u{feff}'))
-            .context("템플릿 .uproject를 해석할 수 없습니다")?;
+        serde_json::from_str(template_text.trim_start_matches('\u{feff}')).context(tr!(
+            "템플릿 .uproject를 해석할 수 없습니다",
+            "Cannot parse the template .uproject"
+        ))?;
     let serde_json::Value::Object(template_object) = value else {
-        bail!("템플릿 .uproject 형식이 올바르지 않습니다");
+        tr_bail!(
+            "템플릿 .uproject 형식이 올바르지 않습니다",
+            "The template .uproject is malformed"
+        );
     };
     let mut object = serde_json::Map::new();
     let mut association_written = false;
@@ -1020,16 +1103,26 @@ fn write_project_descriptor(
     project_name: &str,
     engine_identifier: &str,
 ) -> Result<()> {
-    let template_text = std::fs::read_to_string(template_uproject)
-        .with_context(|| format!("{}을(를) 읽을 수 없습니다", template_uproject.display()))?;
+    let template_text = std::fs::read_to_string(template_uproject).with_context(|| {
+        trf!(
+            "{}을(를) 읽을 수 없습니다",
+            "Cannot read {}",
+            template_uproject.display()
+        )
+    })?;
     let descriptor = build_project_descriptor(
         &template_text,
         template_name,
         project_name,
         engine_identifier,
     )?;
-    std::fs::write(project_file, descriptor)
-        .with_context(|| format!("{}을(를) 쓸 수 없습니다", project_file.display()))
+    std::fs::write(project_file, descriptor).with_context(|| {
+        trf!(
+            "{}을(를) 쓸 수 없습니다",
+            "Cannot write {}",
+            project_file.display()
+        )
+    })
 }
 
 fn generate_project_files(
@@ -1037,12 +1130,16 @@ fn generate_project_files(
     project_file: &Path,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let build_tool = platform::unreal_build_tool(engine_root)
-        .ok_or_else(|| anyhow!("UnrealBuildTool을 찾을 수 없습니다"))?;
+    let build_tool = platform::unreal_build_tool(engine_root).ok_or_else(|| {
+        tr_anyhow!(
+            "UnrealBuildTool을 찾을 수 없습니다",
+            "UnrealBuildTool not found"
+        )
+    })?;
     let log_directory = project_file
         .parent()
         .map(|directory| directory.join("Saved").join("Logs"))
-        .ok_or_else(|| anyhow!("프로젝트 폴더를 알 수 없습니다"))?;
+        .ok_or_else(|| tr_anyhow!("프로젝트 폴더를 알 수 없습니다", "Unknown project folder"))?;
     std::fs::create_dir_all(&log_directory)?;
     let log_path = log_directory.join(PROJECT_FILES_LOG);
     let log_file = std::fs::File::create(&log_path)?;
@@ -1069,9 +1166,13 @@ fn generate_project_files(
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(error_log));
     platform::configure_hidden(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("{} 실행에 실패했습니다", build_tool.display()))?;
+    let mut child = command.spawn().with_context(|| {
+        trf!(
+            "{} 실행에 실패했습니다",
+            "Failed to start {}",
+            build_tool.display()
+        )
+    })?;
     loop {
         if cancel.load(Ordering::Relaxed) {
             if let Err(error) = child.kill() {
@@ -1099,7 +1200,10 @@ fn generate_project_files(
                         .join(" / ")
                 })
                 .unwrap_or_default();
-            bail!("UnrealBuildTool 종료 코드 {status}: {tail}");
+            tr_bail!(
+                "UnrealBuildTool 종료 코드 {status}: {tail}",
+                "UnrealBuildTool exited with {status}: {tail}"
+            );
         }
         std::thread::sleep(Duration::from_millis(200));
     }
