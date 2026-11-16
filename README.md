@@ -25,7 +25,7 @@
 
 ## 설치
 
-[Releases](https://github.com/Mossworm/unreal-hub/releases) 페이지에서 `UnrealHub-<버전>-setup.exe`를 내려받아 실행합니다.
+[Releases](https://github.com/Mossworm/unreal-hub/releases) 페이지에서 `UnrealHubSetup.exe`를 내려받아 실행합니다.
 
 - 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Unreal Hub`에 설치됩니다.
 - 사용자 데이터는 `%APPDATA%\UnrealHub`에 저장되며, 제거해도 남습니다.
@@ -55,7 +55,7 @@ cargo test
 powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 ```
 
-결과물은 `dist\UnrealHub-<버전>-setup.exe`입니다.
+결과물은 `dist\UnrealHubSetup.exe`입니다.
 
 ## 릴리스
 

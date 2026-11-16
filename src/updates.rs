@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const REPOSITORY: &str = "Mossworm/unreal-hub";
-const INSTALLER_SUFFIX: &str = "-setup.exe";
+const INSTALLER_SUFFIX: &str = "setup.exe";
 const USER_AGENT: &str = "UnrealHub-Updater";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -339,12 +339,12 @@ mod tests {
             "html_url": "https://github.com/Mossworm/unreal-hub/releases/tag/v1.0.0",
             "assets": [
                 {"name": "UnrealHub-1.0.0.zip", "browser_download_url": "https://example.invalid/zip", "size": 10},
-                {"name": "UnrealHub-1.0.0-setup.exe", "browser_download_url": "https://example.invalid/setup.exe", "size": 1234, "digest": "sha256:ABCDEF"}
+                {"name": "UnrealHubSetup.exe", "browser_download_url": "https://example.invalid/setup.exe", "size": 1234, "digest": "sha256:ABCDEF"}
             ]
         }"#;
         let release = parse_latest_release(json).unwrap();
         assert_eq!(release.version, parse_version("1.0.0").unwrap());
-        assert_eq!(release.installer_name, "UnrealHub-1.0.0-setup.exe");
+        assert_eq!(release.installer_name, "UnrealHubSetup.exe");
         assert_eq!(release.installer_url, "https://example.invalid/setup.exe");
         assert_eq!(release.size, Some(1234));
         assert_eq!(release.sha256.as_deref(), Some("abcdef"));

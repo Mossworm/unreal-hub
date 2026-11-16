@@ -766,7 +766,6 @@ impl Render for HubView {
         div()
             .id("hub")
             .key_context("Hub")
-            .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::confirm))
             .relative()
@@ -788,6 +787,9 @@ impl Render for HubView {
             .child(self.render_titlebar(&theme, window, cx))
             .child(
                 div()
+                    .id("hub-body")
+                    .track_focus(&self.focus_handle)
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_h_0()
@@ -801,7 +803,26 @@ impl Render for HubView {
                             .h_full()
                             .children(update_banner)
                             .child(div().flex_1().min_h_0().child(content)),
-                    ),
+                    )
+                    .when_some(self.modal.as_ref().map(Modal::view), |this, view| {
+                        this.child(
+                            div()
+                                .id("modal-overlay")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .right_0()
+                                .bottom_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .p_6()
+                                .bg(theme.overlay)
+                                .occlude()
+                                .child(view),
+                        )
+                    })
+                    .child(self.render_toasts(&theme, cx)),
             )
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();
@@ -810,24 +831,5 @@ impl Render for HubView {
                     .update(cx, |state, cx| state.add_project_paths(paths, cx));
             }))
             .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_highlight))
-            .when_some(self.modal.as_ref().map(Modal::view), |this, view| {
-                this.child(
-                    div()
-                        .id("modal-overlay")
-                        .absolute()
-                        .top(px(TITLEBAR_HEIGHT))
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .p_6()
-                        .bg(theme.overlay)
-                        .occlude()
-                        .child(view),
-                )
-            })
-            .child(self.render_toasts(&theme, cx))
     }
 }

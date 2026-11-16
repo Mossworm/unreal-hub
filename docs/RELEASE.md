@@ -77,7 +77,7 @@ UNREAL_HUB_TEST_ENGINE="C:\Program Files\Epic Games\UE_5.9" UNREAL_HUB_TEST_OUTP
    cargo clippy --all-targets -- -D warnings
    cargo test
    ```
-3. 설치 파일을 만든다. 릴리스 빌드 후 Inno Setup으로 `dist\UnrealHub-<버전>-setup.exe`를 만들고 SHA-256을 출력한다.
+3. 설치 파일을 만든다. 릴리스 빌드 후 Inno Setup으로 `dist\UnrealHubSetup.exe`를 만들고 SHA-256을 출력한다.
    ```bash
    powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
    ```
@@ -107,7 +107,7 @@ UNREAL_HUB_TEST_ENGINE="C:\Program Files\Epic Games\UE_5.9" UNREAL_HUB_TEST_OUTP
 | 항목 | 규칙 |
 |---|---|
 | 태그 | `v1.0.0` 형식 (`v` + Major.Minor.Patch) |
-| 자산 | `UnrealHub-1.0.0-setup.exe` 첨부. 업데이트 기능은 이름이 `-setup.exe`로 끝나는 자산을 찾는다 |
+| 자산 | `UnrealHubSetup.exe` 첨부. 업데이트 기능은 이름이 `setup.exe`로 끝나는 자산을 찾는다 (대소문자 무시) |
 | 체크섬 | GitHub가 자산마다 SHA-256을 제공하며, Hub는 내려받은 뒤 이 값으로 검증한다 |
 | 릴리스 종류 | **정식 릴리스**로 게시한다. 초안(draft)과 사전 릴리스(pre-release)는 업데이트 확인에서 보이지 않는다 |
 | 릴리스 노트 | 주요 기능, 알려진 제한 사항, 지원 엔진 버전을 적는다 |

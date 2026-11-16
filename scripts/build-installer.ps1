@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup 컴파일 실패 (종료 코드 $LASTEXITCODE)"
 }
 
-$installer = Join-Path $root "dist\UnrealHub-$version-setup.exe"
+$installer = Join-Path $root "dist\UnrealHubSetup.exe"
 $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
 Write-Host "설치 파일: $installer"
 Write-Host "SHA-256: $hash"
