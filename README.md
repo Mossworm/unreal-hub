@@ -1,66 +1,203 @@
-# Unreal Hub
+<p align="center">
+  <img src="assets/app-icon.svg" width="120" height="120" alt="The Unreal Hub icon: a white U on a black rounded square">
+</p>
 
-엔진 버전 관리와 프로젝트 열기에만 집중한, 빠르고 가벼운 언리얼 엔진 런처입니다. Rust와 [GPUI](https://www.gpui.rs/)로 만들었습니다.
+<h1 align="center">Unreal Hub</h1>
 
-## 주요 기능
+<p align="center"><b>English</b> · <a href="README.ko.md">한국어</a></p>
 
-- **프로젝트 목록:** Epic Games Launcher의 프로젝트 폴더, 에디터 최근 프로젝트, 직접 추가한 폴더를 하나의 목록으로 합쳐 보여 줍니다.
-- **엔진 자동 감지:** 런처로 설치한 엔진과 소스 빌드 엔진을 찾아 각 프로젝트가 어떤 엔진을 쓰는지 표시합니다.
-- **클릭 한 번으로 실행:** 프로젝트를 클릭하면 맞는 엔진의 에디터를 실행하고, 실행 중인 프로젝트를 표시합니다.
-- **프로젝트 관리:** 새 프로젝트 생성, 엔진 버전 변경(`.uproject` 백업 포함), 캐시 정리(휴지통으로 이동).
-- **편의 기능:** 한국어·영어 UI, 시스템 트레이, Windows 시작 시 자동 실행, GitHub Releases 기반 자동 업데이트.
+<p align="center">
+  <b>Pick a project. The right engine opens it.</b><br>
+  A fast, lightweight launcher for Unreal Engine that does two things well:<br>
+  keeping track of your <b>engine versions</b> and <b>opening your projects</b>. Built with Rust and <a href="https://www.gpui.rs/">GPUI</a>.
+</p>
 
-## 스크린샷
+<p align="center">
+  <a href="https://github.com/Mossworm/unreal-hub/releases/latest"><img height="40" alt="Download for Windows" src="https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge&logo=windows&logoColor=white"></a>
+</p>
 
-| 프로젝트 목록 | 설치된 엔진 |
-| --- | --- |
-| ![프로젝트 목록](docs/screenshots/projects.png) | ![설치된 엔진](docs/screenshots/installs.png) |
-| **새 프로젝트** | **설정** |
-| ![새 프로젝트](docs/screenshots/new-project.png) | ![설정](docs/screenshots/settings.png) |
+<p align="center">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B%20x64-0078D4">
+  <img alt="Unreal Engine" src="https://img.shields.io/badge/Unreal%20Engine-5.6%20~%205.9-black?logo=unrealengine&logoColor=white">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-B7410E?logo=rust&logoColor=white"></p>
 
-## 요구 사항
+<p align="center">
+  <img src="docs/screenshots/hero.png" width="880" alt="The project list: every Unreal project on this machine with its engine version"><br>
+  <sub>Every Unreal project on your machine in one list, each matched to the engine it needs.</sub>
+</p>
 
-- Windows 10 이상 (x64)
-- Unreal Engine 5.6 ~ 5.9 (그 이전 버전도 감지·실행은 됩니다)
+<table align="center">
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/projects.png" alt="The project list with favorites, search and the Add menu"><br><sub>Projects</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/installs.png" alt="Installed engines, both launcher installs and source builds"><br><sub>Installed engines</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/new-project.png" alt="The New Project dialog with templates and engine selection"><br><sub>New project</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/settings.png" alt="Settings: language, tray, start with Windows, updates"><br><sub>Settings</sub></td>
+  </tr>
+</table>
 
-## 설치
+---
 
-[Releases](https://github.com/Mossworm/unreal-hub/releases) 페이지에서 `UnrealHubSetup.exe`를 내려받아 실행합니다.
+## Why Unreal Hub
 
-- 관리자 권한 없이 `%LOCALAPPDATA%\Programs\Unreal Hub`에 설치됩니다.
-- 사용자 데이터는 `%APPDATA%\UnrealHub`에 저장되며, 제거해도 남습니다.
-- 설치 파일은 코드 서명되어 있지 않아 Windows SmartScreen 경고가 뜰 수 있습니다. [추가 정보] → [실행]을 눌러 진행합니다.
+The Epic Games Launcher is a store, a library, a news feed and an engine installer in one
+window. When all you want is to open a project, that is a lot to wait for. And once you
+have more than one engine version installed, or a source build next to launcher installs,
+it is easy to lose track of which project goes with which engine.
 
-설치 후에는 새 버전이 나오면 앱 안에서 업데이트 배너로 알려 줍니다.
+Unreal Hub does one job. It reads the settings your launcher and editor already keep,
+finds every project and every engine, matches them up, and opens the project with one
+click. There is nothing to set up: on first launch your projects are already there.
 
-## 소스에서 빌드
+## FAQ
 
-[Rust](https://rustup.rs/) 안정 버전이 필요합니다.
+### Does it replace the Epic Games Launcher?
 
-```bash
+No. You still install and update engines through the Epic Games Launcher (or build them
+from source). Unreal Hub is for the part that comes after: finding a project and opening
+it with the right engine.
+
+### Will it change my launcher or engine settings?
+
+No. Epic's files and the engine's config files are only read, never written. Writing to
+them while the Epic Games Launcher runs gets overwritten and can break your setup, so the
+hub keeps everything it needs in its own files under `%APPDATA%\UnrealHub`.
+
+### Does it work with source-built engines?
+
+Yes. Source builds registered on your machine are found next to launcher installs, and a
+project that points at one by its GUID or custom name is matched to it.
+
+### Which Unreal versions are supported?
+
+Unreal Engine 5.6 to 5.9 are tested. Older versions are still detected and launched.
+
+### Does it run on macOS or Linux?
+
+Not yet. Windows is the only supported platform for now. The platform code is kept apart
+so that others can be added later.
+
+### Is it free?
+
+Yes. Unreal Hub is open source under the MIT license.
+
+## What you get
+
+- **One project list.** Project folders from the Epic Games Launcher, the editor's recent
+  projects and folders you add yourself, merged into one list without duplicates. Search
+  by name or path, and star the ones you open most.
+- **Engines found on their own.** Launcher installs and source builds, with the engine
+  each project uses shown next to it.
+- **One click to open.** The matching editor starts as its own process, so the hub never
+  freezes while it loads. Projects that are already open are marked.
+- **C++ projects that build first.** When a C++ project's editor modules need building, the
+  hub builds them with a progress bar before the editor opens, and shows the log if it fails.
+- **Toolchain check.** The Visual Studio components and .NET runtime an engine needs are
+  checked, and what is missing can be installed from the hub.
+- **Project management.** Create a project from the engine's templates, switch a project
+  to another engine version (the `.uproject` is backed up first), and clean caches by
+  moving them to the Recycle Bin.
+- **Quiet when you are not using it.** System tray, start with Windows, and English and
+  Korean UI.
+- **Updates itself.** New versions from GitHub Releases show up as a banner in the app.
+
+## Install
+
+1. **Download** `UnrealHubSetup.exe` from [Releases](https://github.com/Mossworm/unreal-hub/releases/latest).
+2. **Run it.** No administrator rights needed. The app installs to
+   `%LOCALAPPDATA%\Programs\Unreal Hub`.
+3. **Open a project.** Your existing projects and engines are picked up on first launch.
+
+Your data lives in `%APPDATA%\UnrealHub` and stays when you uninstall.
+
+> [!NOTE]
+> The installer is not code-signed, so Windows SmartScreen may warn about it. Choose
+> **More info** → **Run anyway** to continue.
+
+## How it works
+
+```
+GameUserSettings.ini (launcher project roots) ──┐
+EditorSettings.ini   (recently opened)  ────────┼──▶ project list ──┐
+Folders you add                          ───────┘                   │
+                                                                    ├──▶ Unreal Hub ──▶ UnrealEditor.exe
+LauncherInstalled.dat (launcher installs) ──┐                       │                  (detached)
+Registry Builds key   (source builds)  ─────┴──▶ engine list ───────┘
+```
+
+- Each `.uproject` is read for its `EngineAssociation`: a version such as `5.6` for
+  launcher installs, or a GUID or custom name for source builds.
+- Projects are deduplicated by their full `.uproject` path. Registered folders are scanned
+  one level deep; the hub never walks your whole disk.
+- Scans, file parsing and launches run in the background, so the window stays responsive.
+
+## Privacy
+
+Everything runs on your machine. The hub's own settings, project list and logs are in
+`%APPDATA%\UnrealHub`. The only network requests are the update check against GitHub
+Releases, and the Microsoft downloads for Visual Studio Build Tools or .NET when you ask
+the hub to install them. There is no telemetry.
+
+## Build from source
+
+You need stable [Rust](https://rustup.rs/).
+
+```sh
 cargo build --release
 ```
 
-개발 중 검사:
+Checks to run before you send a change:
 
-```bash
+```sh
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-설치 파일을 만들려면 [Inno Setup 6](https://jrsoftware.org/isinfo.php)이 필요합니다 (`winget install JRSoftware.InnoSetup`).
+<details>
+<summary><b>Building the installer</b></summary>
+<br/>
 
-```bash
+The installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`).
+
+```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 ```
 
-결과물은 `dist\UnrealHubSetup.exe`입니다.
+The output is `dist\UnrealHubSetup.exe`.
 
-## 릴리스
+</details>
 
-`v1.2.3` 형식의 태그를 push하면 GitHub Actions가 검사·빌드 후 설치 파일을 첨부한 **초안 릴리스**를 만듭니다. 릴리스 노트를 다듬은 뒤 정식 릴리스로 게시해야 자동 업데이트에 잡힙니다. 자세한 절차는 [docs/RELEASE.md](docs/RELEASE.md)를 참고하세요.
+<details>
+<summary><b>Releasing</b></summary>
+<br/>
 
-## 라이선스
+Pushing a tag such as `v1.2.3` makes GitHub Actions check, build and create a **draft
+release** with the installer attached. Edit the release notes, then publish it so the
+in-app updater sees it. The full steps are in [docs/RELEASE.md](docs/RELEASE.md).
 
-[MIT](LICENSE)
+</details>
+
+## Status
+
+Version 1.0.0, in daily use by the author. Expect rough edges:
+
+- Windows only for now.
+- The installer is unsigned; see the note under Install.
+- Engines from 5.6 to 5.9 are tested; older ones are detected and launched but get less
+  testing.
+
+Bug reports and ideas are welcome in [issues](https://github.com/Mossworm/unreal-hub/issues).
+
+## Not affiliated
+
+Unreal Hub is an independent open-source project. It is not affiliated with, endorsed by,
+or sponsored by Epic Games. Unreal and Unreal Engine are trademarks or registered
+trademarks of Epic Games, Inc.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
