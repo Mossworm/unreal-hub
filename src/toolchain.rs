@@ -36,6 +36,13 @@ impl ToolVersion {
         (length > 0).then_some(Self { parts, length })
     }
 
+    pub fn from_parts(major: u32, minor: u32, build: u32) -> Self {
+        Self {
+            parts: [major, minor, build, 0],
+            length: 3,
+        }
+    }
+
     pub fn major(&self) -> u32 {
         let [major, ..] = self.parts;
         major

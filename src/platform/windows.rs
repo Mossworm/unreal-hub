@@ -12,6 +12,9 @@ use std::process::Command;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, ERROR_CANCELLED, GetLastError, HANDLE, HWND, LPARAM,
 };
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+};
 use windows_sys::Win32::System::Threading::{
     CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateMutexW, DETACHED_PROCESS, GetExitCodeProcess,
     INFINITE, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
@@ -240,17 +243,61 @@ fn msvc_versions(install_path: &Path) -> Vec<ToolVersion> {
     };
     entries
         .flatten()
-        .filter(|entry| {
-            entry
+        .filter_map(|entry| {
+            let compiler = entry
                 .path()
                 .join("bin")
                 .join("Hostx64")
                 .join("x64")
-                .join("cl.exe")
-                .is_file()
+                .join("cl.exe");
+            if !compiler.is_file() {
+                return None;
+            }
+            file_product_version(&compiler)
+                .or_else(|| ToolVersion::parse(&entry.file_name().to_string_lossy()))
         })
-        .filter_map(|entry| ToolVersion::parse(&entry.file_name().to_string_lossy()))
         .collect()
+}
+
+fn file_product_version(path: &Path) -> Option<ToolVersion> {
+    let file = wide(path.as_os_str());
+    let mut ignored_handle = 0u32;
+    let size = unsafe { GetFileVersionInfoSizeW(file.as_ptr(), &mut ignored_handle) };
+    if size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; size as usize];
+    let read = unsafe { GetFileVersionInfoW(file.as_ptr(), 0, size, buffer.as_mut_ptr().cast()) };
+    if read == 0 {
+        return None;
+    }
+    let root_block = wide(OsStr::new("\\"));
+    let mut fixed_info: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut fixed_info_length = 0u32;
+    let found = unsafe {
+        VerQueryValueW(
+            buffer.as_ptr().cast(),
+            root_block.as_ptr(),
+            &mut fixed_info,
+            &mut fixed_info_length,
+        )
+    };
+    if found == 0
+        || fixed_info.is_null()
+        || (fixed_info_length as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return None;
+    }
+    let fixed_info = unsafe { std::ptr::read_unaligned(fixed_info.cast::<VS_FIXEDFILEINFO>()) };
+    let major = fixed_info.dwProductVersionMS >> 16;
+    if major == 0 {
+        return None;
+    }
+    Some(ToolVersion::from_parts(
+        major,
+        fixed_info.dwProductVersionMS & 0xffff,
+        fixed_info.dwProductVersionLS >> 16,
+    ))
 }
 
 fn windows_kits_roots() -> Vec<PathBuf> {
@@ -635,6 +682,18 @@ pub fn activate_existing_instance(title: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_product_version_from_executable() {
+        let system_root = std::env::var_os("SystemRoot").unwrap();
+        let kernel = PathBuf::from(system_root)
+            .join("System32")
+            .join("kernel32.dll");
+        let version = file_product_version(&kernel).unwrap();
+        assert_eq!(version.major(), 10);
+        let missing = Path::new(r"C:\does-not-exist\cl.exe");
+        assert!(file_product_version(missing).is_none());
+    }
 
     #[test]
     fn accepts_only_valid_microsoft_signatures() {

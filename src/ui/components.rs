@@ -736,7 +736,7 @@ pub fn warning_note(theme: &Theme, text: impl Into<SharedString>) -> impl IntoEl
         .text_color(theme.warning)
         .text_sm()
         .child(icon(Icon::Warning, 1.0, theme.warning))
-        .child(div().flex_1().child(text.into()))
+        .child(div().flex_1().min_w_0().child(text.into()))
 }
 
 pub fn error_note(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
@@ -750,7 +750,7 @@ pub fn error_note(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElem
         .text_color(theme.danger)
         .text_sm()
         .child(icon(Icon::Warning, 1.0, theme.danger))
-        .child(div().flex_1().child(text.into()))
+        .child(div().flex_1().min_w_0().child(text.into()))
 }
 
 pub fn section_label(theme: &Theme, text: impl Into<SharedString>) -> impl IntoElement {
