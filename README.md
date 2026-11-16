@@ -22,6 +22,8 @@
   <img alt="Unreal Engine" src="https://img.shields.io/badge/Unreal%20Engine-5.6%20~%205.9-black?logo=unrealengine&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-B7410E?logo=rust&logoColor=white"></p>
 
+https://github.com/user-attachments/assets/d5e60edd-c5df-4ff2-97bb-1be7849e48c6
+
 <p align="center">
   <img src="docs/screenshots/hero.png" width="880" alt="The project list: every Unreal project on this machine with its engine version"><br>
   <sub>Every Unreal project on your machine in one list, each matched to the engine it needs.</sub>
