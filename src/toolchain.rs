@@ -446,6 +446,10 @@ pub fn plan_visual_studio(
     }
 }
 
+pub fn has_leftover_files(path: &Path) -> bool {
+    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
+}
+
 pub fn bootstrapper_arguments(components: &[String]) -> Vec<String> {
     let mut arguments: Vec<String> = ["--passive", "--wait", "--norestart"]
         .into_iter()
@@ -575,6 +579,7 @@ pub fn failure_message(code: i32) -> String {
 pub enum InstallProgress {
     Downloading { received: u64, total: Option<u64> },
     Verifying,
+    RemovingLeftovers,
     Updating,
     Installing,
     InstallingDotnet,
@@ -679,6 +684,15 @@ fn install_visual_studio(
             )?;
             progress(InstallProgress::Verifying);
             platform::verify_microsoft_signature(&bootstrapper)?;
+            if let Some(install_path) = platform::default_build_tools_directory()
+                && has_leftover_files(&install_path)
+            {
+                progress(InstallProgress::RemovingLeftovers);
+                let outcome = remove_leftover_install(&install_path, working_directory)?;
+                if outcome != InstallOutcome::Completed {
+                    return Ok(outcome);
+                }
+            }
             progress(InstallProgress::Installing);
             run_installer(
                 &bootstrapper,
@@ -719,6 +733,41 @@ fn install_visual_studio(
             )
         }
     }
+}
+
+fn remove_leftover_install(
+    install_path: &Path,
+    working_directory: &Path,
+) -> Result<InstallOutcome> {
+    if platform::is_registered_visual_studio_directory(install_path) {
+        log::warn!(
+            "{} belongs to a registered Visual Studio instance and is left untouched",
+            install_path.display()
+        );
+        return Ok(InstallOutcome::Completed);
+    }
+    log::info!("Removing leftover files in {}", install_path.display());
+    match std::fs::remove_dir_all(install_path) {
+        Ok(()) => return Ok(InstallOutcome::Completed),
+        Err(error) => log::info!(
+            "Removing {} needs elevation: {error}",
+            install_path.display()
+        ),
+    }
+    match platform::remove_directory_elevated(install_path, working_directory)? {
+        platform::ElevatedRun::Declined => return Ok(InstallOutcome::Cancelled),
+        platform::ElevatedRun::Exited(code) => {
+            log::info!("Removing {} exited with {code}", install_path.display())
+        }
+    }
+    if has_leftover_files(install_path) {
+        tr_bail!(
+            "이전 설치에서 남은 {} 폴더를 지울 수 없습니다. 폴더를 직접 지운 뒤 다시 시도하세요.",
+            "Cannot remove the leftover folder {} from a previous installation. Delete it and try again.",
+            install_path.display()
+        );
+    }
+    Ok(InstallOutcome::Completed)
 }
 
 fn run_installer(
@@ -1007,6 +1056,17 @@ mod tests {
             ComponentState::Found(version("4.8"))
         );
         assert!(supported_netfx_sdk.is_ready());
+    }
+
+    #[test]
+    fn detects_leftover_install_files() {
+        let root = tempfile::tempdir().unwrap();
+        let install_path = root.path().join("BuildTools");
+        assert!(!has_leftover_files(&install_path));
+        std::fs::create_dir(&install_path).unwrap();
+        assert!(!has_leftover_files(&install_path));
+        std::fs::create_dir_all(install_path.join("VC").join("Tools")).unwrap();
+        assert!(has_leftover_files(&install_path));
     }
 
     #[test]

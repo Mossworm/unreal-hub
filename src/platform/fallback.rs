@@ -130,6 +130,21 @@ pub fn visual_studio_setup() -> Option<PathBuf> {
     None
 }
 
+pub fn default_build_tools_directory() -> Option<PathBuf> {
+    None
+}
+
+pub fn is_registered_visual_studio_directory(_path: &Path) -> bool {
+    false
+}
+
+pub fn remove_directory_elevated(_path: &Path, _working_directory: &Path) -> Result<ElevatedRun> {
+    tr_bail!(
+        "이 플랫폼에서는 빌드 도구 설치를 지원하지 않습니다",
+        "Installing build tools is not supported on this platform"
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ElevatedRun {
     Exited(i32),

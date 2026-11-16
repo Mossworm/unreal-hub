@@ -649,6 +649,11 @@ impl BuildDialog {
                 "Verifying the installer signature…"
             )
             .to_string(),
+            InstallProgress::RemovingLeftovers => tr!(
+                "이전 설치에서 남은 파일을 지우는 중…",
+                "Removing files left from a previous installation…"
+            )
+            .to_string(),
             InstallProgress::Updating => tr!(
                 "Visual Studio를 업데이트하는 중…",
                 "Updating Visual Studio…"

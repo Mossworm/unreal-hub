@@ -1,6 +1,6 @@
 use crate::toolchain::{
-    ToolVersion, ToolchainRequirements, ToolchainStatus, VisualStudioInstance, evaluate,
-    parse_vswhere_instances,
+    InstanceSummary, ToolVersion, ToolchainRequirements, ToolchainStatus, VisualStudioInstance,
+    evaluate, join_windows_arguments, parse_vswhere_instances,
 };
 use anyhow::{Context as _, Result, bail};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -213,6 +213,15 @@ fn visual_studio_installer_directory() -> Option<PathBuf> {
     })
 }
 
+pub fn default_build_tools_directory() -> Option<PathBuf> {
+    std::env::var_os("ProgramFiles(x86)").map(|root| {
+        PathBuf::from(root)
+            .join("Microsoft Visual Studio")
+            .join("2022")
+            .join("BuildTools")
+    })
+}
+
 fn vswhere_path() -> Option<PathBuf> {
     visual_studio_installer_directory()
         .map(|directory| directory.join("vswhere.exe"))
@@ -225,12 +234,53 @@ pub fn visual_studio_setup() -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn visual_studio_instances() -> Vec<VisualStudioInstance> {
+pub fn is_registered_visual_studio_directory(path: &Path) -> bool {
+    let target = comparable_path_text(path);
+    vswhere_summaries(true)
+        .iter()
+        .any(|summary| comparable_path_text(&summary.install_path) == target)
+}
+
+fn comparable_path_text(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+pub fn remove_directory_elevated(path: &Path, working_directory: &Path) -> Result<ElevatedRun> {
+    let path_text = path.to_string_lossy().into_owned();
+    if path_text.contains(['"', '%', '!']) {
+        bail!(
+            "{} contains characters that cannot be passed to rmdir",
+            path.display()
+        );
+    }
+    let command_processor = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("cmd.exe"))
+        .filter(|path| path.is_file())
+        .ok_or_else(|| anyhow::anyhow!("cmd.exe not found"))?;
+    let arguments: Vec<String> = ["/d", "/c", "rmdir", "/s", "/q"]
+        .into_iter()
+        .map(String::from)
+        .chain(std::iter::once(path_text))
+        .collect();
+    run_elevated(
+        &command_processor,
+        &join_windows_arguments(&arguments),
+        working_directory,
+    )
+}
+
+fn vswhere_summaries(include_incomplete: bool) -> Vec<InstanceSummary> {
     let Some(vswhere) = vswhere_path() else {
         return Vec::new();
     };
     let mut command = Command::new(vswhere);
     command.args(["-products", "*", "-format", "json", "-utf8"]);
+    if include_incomplete {
+        command.arg("-all");
+    }
     configure_hidden(&mut command);
     let output = match command.output() {
         Ok(output) if output.status.success() => output,
@@ -243,14 +293,17 @@ fn visual_studio_instances() -> Vec<VisualStudioInstance> {
             return Vec::new();
         }
     };
-    let summaries = match parse_vswhere_instances(&String::from_utf8_lossy(&output.stdout)) {
+    match parse_vswhere_instances(&String::from_utf8_lossy(&output.stdout)) {
         Ok(summaries) => summaries,
         Err(error) => {
             log::warn!("{error:#}");
-            return Vec::new();
+            Vec::new()
         }
-    };
-    summaries
+    }
+}
+
+fn visual_studio_instances() -> Vec<VisualStudioInstance> {
+    vswhere_summaries(false)
         .into_iter()
         .map(|summary| VisualStudioInstance {
             msvc_versions: msvc_versions(&summary.install_path),
