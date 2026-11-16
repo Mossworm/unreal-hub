@@ -497,6 +497,59 @@ impl HubState {
         cx.notify();
     }
 
+    fn insert_inspections(
+        &mut self,
+        inspections: Vec<ProjectInspection>,
+        origin: ProjectOrigin,
+        cx: &mut Context<Self>,
+    ) -> (usize, Option<String>) {
+        let mut added = 0;
+        let mut last_key = None;
+        for inspection in inspections {
+            last_key = Some(inspection.key.clone());
+            if let Some(record) = self.record_mut(&inspection.key) {
+                apply_inspection(record, &inspection);
+                continue;
+            }
+            let mut record = ProjectRecord::new(inspection.path.clone(), origin);
+            apply_inspection(&mut record, &inspection);
+            self.record_index
+                .insert(inspection.key.clone(), self.records.len());
+            self.records.push(record);
+            added += 1;
+        }
+        self.rebuild_rows();
+        self.save_projects(cx);
+        self.rebuild_watcher(cx);
+        (added, last_key)
+    }
+
+    pub fn register_created_project(
+        &mut self,
+        project_file: PathBuf,
+        launch: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let work = cx
+            .background_spawn(async move { projects::inspect_project(&clean_path(&project_file)) });
+        cx.spawn(async move |this, cx| {
+            let inspection = work.await;
+            this.update(cx, |state, cx| {
+                let (_, key) =
+                    state.insert_inspections(vec![inspection], ProjectOrigin::Created, cx);
+                if let Some(key) = key {
+                    cx.emit(HubEvent::RevealProject(key.clone()));
+                    if launch {
+                        state.launch_project(&key, cx);
+                    }
+                }
+                cx.notify();
+            })
+            .log_err();
+        })
+        .detach();
+    }
+
     pub fn add_project_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let work = cx.background_spawn(async move {
             projects::collect_dropped_projects(&paths)
@@ -525,24 +578,7 @@ impl HubState {
             );
             return;
         }
-        let mut added = 0;
-        let mut reveal_key = None;
-        for inspection in inspections {
-            reveal_key = Some(inspection.key.clone());
-            if let Some(record) = self.record_mut(&inspection.key) {
-                apply_inspection(record, &inspection);
-                continue;
-            }
-            let mut record = ProjectRecord::new(inspection.path.clone(), ProjectOrigin::Manual);
-            apply_inspection(&mut record, &inspection);
-            self.record_index
-                .insert(inspection.key.clone(), self.records.len());
-            self.records.push(record);
-            added += 1;
-        }
-        self.rebuild_rows();
-        self.save_projects(cx);
-        self.rebuild_watcher(cx);
+        let (added, reveal_key) = self.insert_inspections(inspections, ProjectOrigin::Manual, cx);
         if added == 0 {
             self.toast("이미 목록에 있는 프로젝트입니다", ToastKind::Info, cx);
         } else {

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE,
-    WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS, INFINITE, OpenProcess,
+    PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
@@ -134,6 +134,53 @@ pub fn detect_epic_launcher() -> Option<PathBuf> {
 
 pub fn configure_detached(command: &mut Command) {
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+}
+
+pub fn configure_hidden(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
+    let path = engine_root
+        .join("Engine")
+        .join("Binaries")
+        .join("DotNET")
+        .join("UnrealBuildTool")
+        .join("UnrealBuildTool.exe");
+    path.is_file().then_some(path)
+}
+
+pub fn has_cpp_toolchain() -> bool {
+    let Some(installer) = std::env::var_os("ProgramFiles(x86)").map(|root| {
+        PathBuf::from(root)
+            .join("Microsoft Visual Studio")
+            .join("Installer")
+            .join("vswhere.exe")
+    }) else {
+        return false;
+    };
+    if !installer.is_file() {
+        return false;
+    }
+    let mut command = Command::new(installer);
+    command.args([
+        "-products",
+        "*",
+        "-requires",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "-property",
+        "installationPath",
+    ]);
+    configure_hidden(&mut command);
+    match command.output() {
+        Ok(output) => {
+            output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+        }
+        Err(error) => {
+            log::warn!("vswhere failed: {error}");
+            false
+        }
+    }
 }
 
 pub fn wait_for_process_exit(pid: u32) -> Result<()> {

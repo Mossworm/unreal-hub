@@ -37,6 +37,7 @@ pub enum ProjectOrigin {
     WatchFolder,
     EngineRecent,
     EpicLauncher,
+    Created,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

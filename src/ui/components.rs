@@ -138,7 +138,6 @@ pub struct Button {
     leading_icon: Option<Icon>,
     trailing_icon: Option<Icon>,
     disabled: bool,
-    tooltip: Option<SharedString>,
     on_click: Option<ClickHandler>,
 }
 
@@ -151,7 +150,6 @@ impl Button {
             leading_icon: None,
             trailing_icon: None,
             disabled: false,
-            tooltip: None,
             on_click: None,
         }
     }
@@ -185,11 +183,6 @@ impl Button {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
-        self.tooltip = Some(text.into());
         self
     }
 
@@ -265,7 +258,6 @@ impl RenderOnce for Button {
             .when_some(self.trailing_icon, |this, trailing| {
                 this.child(icon(trailing, 0.85, foreground))
             })
-            .when_some(self.tooltip, |this, text| this.tooltip(tooltip(text)))
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .hover(move |style| style.bg(hover_background))

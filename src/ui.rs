@@ -2,6 +2,7 @@ pub mod components;
 pub mod dialogs;
 pub mod hub_view;
 pub mod installs_view;
+pub mod new_project_dialog;
 pub mod projects_view;
 pub mod settings_view;
 pub mod text_input;

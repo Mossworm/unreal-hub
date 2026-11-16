@@ -3,9 +3,11 @@
 mod engines;
 mod paths;
 mod platform;
+mod project_creation;
 mod projects;
 mod state;
 mod storage;
+mod templates;
 mod ui;
 mod unreal;
 mod util;

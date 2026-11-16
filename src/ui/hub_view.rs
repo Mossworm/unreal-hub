@@ -5,6 +5,7 @@ use crate::ui::dialogs::{
     CacheCleanupDialog, ChangeEngineDialog, ChangeEngineMode, DialogEvent, RemoveEngineDialog,
 };
 use crate::ui::installs_view::{InstallsEvent, InstallsView};
+use crate::ui::new_project_dialog::NewProjectDialog;
 use crate::ui::projects_view::{ProjectsEvent, ProjectsView};
 use crate::ui::settings_view::SettingsDialog;
 use crate::ui::theme::Theme;
@@ -24,6 +25,7 @@ enum Modal {
     ChangeEngine(Entity<ChangeEngineDialog>),
     CacheCleanup(Entity<CacheCleanupDialog>),
     RemoveEngine(Entity<RemoveEngineDialog>),
+    NewProject(Entity<NewProjectDialog>),
 }
 
 impl Modal {
@@ -33,6 +35,7 @@ impl Modal {
             Modal::ChangeEngine(view) => view.clone().into(),
             Modal::CacheCleanup(view) => view.clone().into(),
             Modal::RemoveEngine(view) => view.clone().into(),
+            Modal::NewProject(view) => view.clone().into(),
         }
     }
 
@@ -42,6 +45,14 @@ impl Modal {
             Modal::ChangeEngine(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
             Modal::CacheCleanup(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
             Modal::RemoveEngine(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
+            Modal::NewProject(view) => view.update(cx, |dialog, cx| dialog.confirm(window, cx)),
+        }
+    }
+
+    fn request_close(&self, cx: &mut Context<HubView>) -> bool {
+        match self {
+            Modal::NewProject(view) => view.update(cx, |dialog, cx| dialog.request_close(cx)),
+            _ => true,
         }
     }
 }
@@ -192,6 +203,11 @@ impl HubView {
             ProjectsEvent::MissingEngine(key) => {
                 self.open_change_engine(key.clone(), ChangeEngineMode::MissingEngine, window, cx)
             }
+            ProjectsEvent::NewProject => {
+                let state = self.state.clone();
+                let dialog = cx.new(|cx| NewProjectDialog::new(state, cx));
+                self.show_modal(Modal::NewProject(dialog.clone()), &dialog, window, cx);
+            }
             ProjectsEvent::CleanCache(key) => {
                 let state = self.state.clone();
                 let key = key.clone();
@@ -252,6 +268,10 @@ impl HubView {
             window,
             |this, _, event: &DialogEvent, window, cx| match event {
                 DialogEvent::Close => this.close_modal(window, cx),
+                DialogEvent::ShowInstalls => {
+                    this.close_modal(window, cx);
+                    this.select_tab(Tab::Installs, cx);
+                }
             },
         ));
         self.modal = Some(modal);
@@ -304,8 +324,10 @@ impl HubView {
     }
 
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal.is_some() {
-            self.close_modal(window, cx);
+        if let Some(modal) = self.modal.as_ref() {
+            if modal.request_close(cx) {
+                self.close_modal(window, cx);
+            }
             return;
         }
         let projects_dismissed = self

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 pub enum DialogEvent {
     Close,
+    ShowInstalls,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

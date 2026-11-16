@@ -21,6 +21,7 @@ const ENGINE_COLUMN_WIDTH: f32 = 11.0;
 const ICON_COLUMN_WIDTH: f32 = 2.75;
 
 pub enum ProjectsEvent {
+    NewProject,
     ChangeEngine(String),
     MissingEngine(String),
     CleanCache(String),
@@ -588,7 +589,7 @@ impl ProjectsView {
                         )
                     }),
             )
-            .child(new_project_button("new-project"))
+            .child(self.new_project_button("new-project", cx))
     }
 
     fn render_column_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -709,18 +710,20 @@ impl ProjectsView {
                         Button::new("empty-add-project", "프로젝트 추가")
                             .on_click(cx.listener(|this, _, _, cx| this.pick_project_files(cx))),
                     )
-                    .child(new_project_button("empty-new-project")),
+                    .child(self.new_project_button("empty-new-project", cx)),
             )
             .into_any_element()
     }
-}
 
-fn new_project_button(id: &'static str) -> Button {
-    Button::new(id, "새 프로젝트")
-        .primary()
-        .leading_icon(Icon::Plus)
-        .disabled(true)
-        .tooltip("새 프로젝트 생성은 다음 단계(M5)에서 지원됩니다")
+    fn new_project_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
+        Button::new(id, "새 프로젝트")
+            .primary()
+            .leading_icon(Icon::Plus)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.dismiss_menus(cx);
+                cx.emit(ProjectsEvent::NewProject);
+            }))
+    }
 }
 
 impl Render for ProjectsView {

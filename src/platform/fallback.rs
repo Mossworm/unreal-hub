@@ -77,6 +77,22 @@ pub fn detect_epic_launcher() -> Option<PathBuf> {
 
 pub fn configure_detached(_command: &mut Command) {}
 
+pub fn configure_hidden(_command: &mut Command) {}
+
+pub fn unreal_build_tool(engine_root: &Path) -> Option<PathBuf> {
+    let path = engine_root
+        .join("Engine")
+        .join("Binaries")
+        .join("DotNET")
+        .join("UnrealBuildTool")
+        .join("UnrealBuildTool");
+    path.is_file().then_some(path)
+}
+
+pub fn has_cpp_toolchain() -> bool {
+    true
+}
+
 pub fn wait_for_process_exit(pid: u32) -> Result<()> {
     bail!("waiting for process {pid} is not supported on this platform")
 }
